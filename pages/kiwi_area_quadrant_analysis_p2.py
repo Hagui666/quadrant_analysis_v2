@@ -248,8 +248,7 @@ else:
         items = [html.escape(x.strip()) for x in items if x.strip()]
         if not items:
             return '<div class="empty">（無）</div>'
-        lis = "
-".join([f"<li>{it}</li>" for it in items])
+        lis = "\n".join([f"<li>{it}</li>" for it in items])
         return f"<ul class=\"items\">{lis}</ul>"
 
     dash_df = fdf.copy()

@@ -277,6 +277,15 @@ else:
     palette = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf']
     brand_color_map = {b: palette[i % len(palette)] for i, b in enumerate(uniq_brands)}
 
+    # 圖例（品牌 ↔ 顏色）
+    legend_items = []
+    for b in uniq_brands:
+        c = brand_color_map.get(b, "#111111")
+        legend_items.append(
+            f'<div class="legend-item"><span class="dot" style="background:{html.escape(c)}"></span>{html.escape(str(b))}</div>'
+        )
+    legend_html = '<div class="legend">' + ''.join(legend_items) + '</div>' if legend_items else ''
+
     # 估算需要的高度，避免 iframe 內部捲軸
     # 以「每個象限」中本品/競品兩邊較大的筆數做為該象限高度基準，再取每一列(上/下)兩個象限的最大高度
     line_px = 24  # 每筆清單大約高度（含行距）
@@ -318,13 +327,37 @@ else:
       .count{ font-weight:800; color:#111; }
 
       /* ✅ 兩欄條列：節省高度 + 字體放大（方便貼簡報） */
+      .legend{
+        display:flex;
+        flex-wrap: wrap;
+        gap: 10px 14px;
+        align-items:center;
+        margin: 6px 0 12px 0;
+        padding: 8px 10px;
+        border: 1px solid rgba(0,0,0,0.12);
+        border-radius: 10px;
+        background: #ffffff;
+      }
+      .legend-item{
+        display:flex;
+        align-items:center;
+        gap: 7px;
+        font-size: 12px;
+        color:#111;
+        white-space: nowrap;
+      }
+
       .items{
         list-style: none;     /* 取消預設黑點 */
         padding: 0;
         margin: 0;
-        font-size: 14px;      /* 放大一點，方便貼簡報 */
+        font-size: 13px;      /* 稍大、但不會太擠 */
         line-height: 1.55;
         color:#111;
+
+        /* ✅ 多直列顯示（縮短高度） */
+        column-count: 2;
+        column-gap: 18px;
       }
       .items li{
         display: flex;
@@ -333,6 +366,9 @@ else:
         margin: 0 0 6px 0;
         break-inside: avoid;
         -webkit-column-break-inside: avoid;
+
+        /* ✅ 每筆一行不換行 */
+        white-space: nowrap;
       }
       .dot{
         width: 9px;
@@ -344,19 +380,25 @@ else:
       }
       .name{
         display: inline-block;
-        white-space: nowrap;
       }
+
+      /* 若門店名稱很長：不換行，改用左右捲動（避免截斷或換行） */
+      .side{
+        overflow-x: auto;
+      }
+
       .empty{ color:#666; font-style:italic; }
     </style>
     """
 
     quad_parts = [
-        """
+        f"""
         <div class="toolbar">
           <button class="btn" onclick="downloadDashboard()">下載圖片（PNG）</button>
           <span class="hint">（會將下方整個象限儀表板輸出成圖片）</span>
         </div>
         <div id="dashboard">
+          {legend_html}
           <div class="quad-grid">
         """
     ]

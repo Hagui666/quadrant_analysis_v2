@@ -36,7 +36,6 @@ STORE_UI_COL = "門店"
 INCLUDE_COL = "帶入象限分析"
 ADDRESS_COL = "地址"
 
-# 本/競品欄位候選
 COMP_COL_CANDIDATES = ["本/競品", "本競品", "本品/競品", "本品競品", "類別", "類型"]
 
 # =========================
@@ -80,15 +79,13 @@ if missing:
     st.stop()
 
 # =========================
-# Prepare base data (全資料，不做分區/城市等細分)
+# Prepare base data (全資料；不做分區/城市篩選)
 # =========================
 df = df.copy()
 
-# 只保留 帶入象限分析 = y
 df[INCLUDE_COL] = df[INCLUDE_COL].astype(str).str.strip().str.lower()
 df = df[df[INCLUDE_COL] == "y"].copy()
 
-# 門店欄（matched_name → 門店）
 df[STORE_UI_COL] = (
     df[MATCHED_COL].astype(str)
     .replace({"nan": np.nan})
@@ -97,7 +94,6 @@ df[STORE_UI_COL] = (
     .replace({"": np.nan})
 )
 
-# 轉數值
 df["_x_raw"] = to_numeric_series(df[X_COL])  # 成長率
 df["_y_raw"] = to_numeric_series(df[Y_COL])  # 回推平均營業額
 df = df.dropna(subset=["_x_raw", "_y_raw"]).copy()
@@ -106,31 +102,61 @@ df = df.dropna(subset=["_x_raw", "_y_raw"]).copy()
 df["_x"] = df["_x_raw"].where(df["_x_raw"].abs() <= 1.5, df["_x_raw"] / 100.0)
 df["_y"] = df["_y_raw"]
 
-# 先找本/競品欄位（用全資料找，避免篩選後消失）
 comp_col = find_first_existing_col(df, COMP_COL_CANDIDATES)
 
 # =========================
 # UI
 # =========================
-st.title("P2｜品牌象限分組（不做分區/城市等細分）")
+st.title("P2｜品牌象限分組（每個品牌各自計算分界）")
 
 cut_mode = st.radio("分界點計算方式", ["平均值", "中位數"], index=0, horizontal=True)
 
-# ✅ 固定分界：永遠用「全資料 df」算，不受品牌選擇影響
-df_all = df.copy()
+# ✅ 品牌篩選只控制「顯示」，不影響分組運算邏輯
+# （但因為每品牌分界只用該品牌自己的資料，所以選不選其他品牌不會改變該品牌結果）
+brands_all = sorted(df[BRAND_COL].dropna().astype(str).unique().tolist())
+brand_pick = st.multiselect(
+    "品牌（多選，僅影響顯示，不影響各品牌分組運算）",
+    options=brands_all,
+    default=brands_all
+)
 
+# =========================
+# 1) 先用「全資料 df」算出每個品牌自己的分界值（固定，不受 brand_pick 影響）
+# =========================
 if cut_mode == "平均值":
-    x_cut = float(df_all["_x"].mean())
-    y_cut = float(df_all["_y"].mean())
+    brand_cuts = (
+        df.groupby(BRAND_COL, dropna=False)
+          .agg(brand_x_cut=("_x", "mean"), brand_y_cut=("_y", "mean"), store_cnt=("_x", "size"))
+          .reset_index()
+    )
 else:
-    x_cut = float(df_all["_x"].median())
-    y_cut = float(df_all["_y"].median())
+    brand_cuts = (
+        df.groupby(BRAND_COL, dropna=False)
+          .agg(brand_x_cut=("_x", "median"), brand_y_cut=("_y", "median"), store_cnt=("_x", "size"))
+          .reset_index()
+    )
+
+# 只顯示勾選品牌的分界表
+brand_cuts_show = brand_cuts[brand_cuts[BRAND_COL].astype(str).isin(brand_pick)].copy() if brand_pick else brand_cuts.iloc[0:0].copy()
+brand_cuts_show = brand_cuts_show.sort_values(BRAND_COL)
+
+st.subheader("各品牌分界值（用於該品牌門店象限判定）")
+show_cuts = brand_cuts_show.copy()
+show_cuts["X分界(成長率)"] = show_cuts["brand_x_cut"].map(lambda v: f"{v:.2%}")
+show_cuts["Y分界(回推平均營業額)"] = show_cuts["brand_y_cut"].map(lambda v: f"{v:,.2f}")
+show_cuts = show_cuts[[BRAND_COL, "store_cnt", "X分界(成長率)", "Y分界(回推平均營業額)"]].rename(columns={"store_cnt": "筆數"})
+st.dataframe(show_cuts, width="stretch")
+
+# =========================
+# 2) 把品牌分界 merge 回每筆資料，計算「品牌內象限」
+# =========================
+df_all = df.merge(brand_cuts[[BRAND_COL, "brand_x_cut", "brand_y_cut"]], on=BRAND_COL, how="left")
 
 conds = [
-    (df_all["_x"] >= x_cut) & (df_all["_y"] >= y_cut),
-    (df_all["_x"] <  x_cut) & (df_all["_y"] >= y_cut),
-    (df_all["_x"] <  x_cut) & (df_all["_y"] <  y_cut),
-    (df_all["_x"] >= x_cut) & (df_all["_y"] <  y_cut),
+    (df_all["_x"] >= df_all["brand_x_cut"]) & (df_all["_y"] >= df_all["brand_y_cut"]),
+    (df_all["_x"] <  df_all["brand_x_cut"]) & (df_all["_y"] >= df_all["brand_y_cut"]),
+    (df_all["_x"] <  df_all["brand_x_cut"]) & (df_all["_y"] <  df_all["brand_y_cut"]),
+    (df_all["_x"] >= df_all["brand_x_cut"]) & (df_all["_y"] <  df_all["brand_y_cut"]),
 ]
 q_labels = ["第一象限", "第二象限", "第三象限", "第四象限"]
 df_all["象限"] = np.select(conds, q_labels, default="未分類")
@@ -138,30 +164,20 @@ df_all["象限"] = np.select(conds, q_labels, default="未分類")
 q_order_map = {"第一象限": 1, "第二象限": 2, "第三象限": 3, "第四象限": 4}
 df_all["_q_order"] = df_all["象限"].map(q_order_map).fillna(99).astype(int)
 
-# ✅ 品牌篩選：僅影響顯示（不影響象限計算）
-brands = sorted(df_all[BRAND_COL].dropna().astype(str).unique().tolist())
-brand_pick = st.multiselect(
-    "品牌（多選，僅影響顯示，不影響象限分界/分類）",
-    options=brands,
-    default=brands
-)
-
+# ✅ 最後才套 brand_pick 做「顯示過濾」
 fdf = df_all[df_all[BRAND_COL].astype(str).isin(brand_pick)].copy() if brand_pick else df_all.iloc[0:0].copy()
 if len(fdf) == 0:
     st.warning("目前品牌篩選結果為空，請調整選擇。")
     st.stop()
 
-c1, c2, c3 = st.columns(3)
-c1.metric("X 分界值（成長率）", f"{x_cut:.2%}")
-c2.metric("Y 分界值（回推平均營業額）", f"{y_cut:,.2f}")
-c3.metric("顯示筆數（篩選後）", f"{len(fdf):,}")
+st.caption(f"顯示筆數（篩選後）：{len(fdf):,}")
 
 # =========================
 # Output table (欄位跟 p1 明細一致 + 本/競品放第一欄)
 # =========================
 detail_cols = []
 if comp_col is not None:
-    detail_cols.append(comp_col)      # 本/競品（第一欄）
+    detail_cols.append(comp_col)
 
 detail_cols += [
     BRAND_COL,
@@ -171,8 +187,8 @@ detail_cols += [
     "行政區",
     ADDRESS_COL,
     CIRCLE_COL,
-    Y_COL,     # 回推平均營業額（Y）
-    X_COL,     # 成長率（X）
+    Y_COL,
+    X_COL,
     "象限",
 ]
 
@@ -184,7 +200,7 @@ out_df = (
        .copy()
 )
 
-st.subheader("品牌分組後門店明細（含象限）")
+st.subheader("品牌內象限分組後門店明細（含象限）")
 st.dataframe(out_df, width="stretch")
 
 # =========================
@@ -194,7 +210,7 @@ st.markdown("---")
 st.subheader("象限儀表板（本品 / 競品）")
 
 if comp_col is None:
-    st.warning("找不到『本/競品』欄位，無法產生象限儀表板。請確認資料來源是否有本品/競品標記欄位（例如：本/競品）。")
+    st.warning("找不到『本/競品』欄位，無法產生象限儀表板。")
 else:
     q_meta = {
         "第一象限": {"desc": "高營收/高成長率", "tag": "明星"},
@@ -203,13 +219,7 @@ else:
         "第四象限": {"desc": "低營收/高成長率", "tag": "潛力"},
     }
 
-    # 位置：左上Q2、右上Q1、左下Q3、右下Q4
-    grid_order = [
-        "第二象限",
-        "第一象限",
-        "第三象限",
-        "第四象限",
-    ]
+    grid_order = ["第二象限", "第一象限", "第三象限", "第四象限"]
 
     def build_items(df_part: pd.DataFrame) -> str:
         if len(df_part) == 0:
@@ -224,68 +234,18 @@ else:
     css_white = """
     <style>
       body { background:#ffffff; color:#111111; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",Arial,sans-serif; }
-
-      .quad-grid{
-        display:grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 12px;
-      }
-      .quad{
-        border: 1px solid rgba(0,0,0,0.18);
-        border-radius: 10px;
-        padding: 10px 12px;
-        background: #ffffff;
-      }
-      .quad-title{
-        text-align:center;
-        font-weight: 800;
-        font-size: 16px;
-        margin-bottom: 4px;
-        color:#111111;
-      }
-      .quad-sub{
-        text-align:center;
-        font-size: 12px;
-        color:#333333;
-        margin-bottom: 10px;
-      }
-      .inner-grid{
-        display:grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 10px;
-      }
-      .side{
-        border: 1px solid rgba(0,0,0,0.16);
-        border-radius: 8px;
-        padding: 8px 10px;
-        min-height: 140px;
-        background: #ffffff;
-      }
-      .side-head{
-        font-weight: 800;
-        margin-bottom: 6px;
-        color:#111111;
-      }
-      .tag-row{
-        display:flex;
-        align-items:center;
-        justify-content: space-between;
-        font-size: 13px;
-        margin-bottom: 6px;
-        color:#111111;
-      }
+      .quad-grid{ display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .quad{ border:1px solid rgba(0,0,0,0.18); border-radius:10px; padding:10px 12px; background:#fff; }
+      .quad-title{ text-align:center; font-weight:800; font-size:16px; margin-bottom:4px; color:#111; }
+      .quad-sub{ text-align:center; font-size:12px; color:#333; margin-bottom:10px; }
+      .inner-grid{ display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+      .side{ border:1px solid rgba(0,0,0,0.16); border-radius:8px; padding:8px 10px; min-height:140px; background:#fff; }
+      .side-head{ font-weight:800; margin-bottom:6px; color:#111; }
+      .tag-row{ display:flex; align-items:center; justify-content:space-between; font-size:13px; margin-bottom:6px; color:#111; }
       .tag{ font-weight:800; }
-      .count{ font-weight:800; color:#111111; }
-      .items{
-        font-size: 12px;
-        line-height: 1.35;
-        color:#111111;
-        max-height: 220px;
-        overflow: auto;
-        padding-right: 4px;
-      }
-      .empty{ color:#666666; font-style: italic; }
-
+      .count{ font-weight:800; color:#111; }
+      .items{ font-size:12px; line-height:1.35; color:#111; max-height:220px; overflow:auto; padding-right:4px; }
+      .empty{ color:#666; font-style:italic; }
       .items::-webkit-scrollbar { width: 8px; }
       .items::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.25); border-radius: 10px; }
       .items::-webkit-scrollbar-track { background: rgba(0,0,0,0.06); border-radius: 10px; }
@@ -313,23 +273,15 @@ else:
             <div class="quad">
               <div class="quad-title">{q_name}</div>
               <div class="quad-sub">({desc})</div>
-
               <div class="inner-grid">
                 <div class="side">
                   <div class="side-head">本品</div>
-                  <div class="tag-row">
-                    <div class="tag">{tag_name}：</div>
-                    <div class="count">{ben_cnt}</div>
-                  </div>
+                  <div class="tag-row"><div class="tag">{tag_name}：</div><div class="count">{ben_cnt}</div></div>
                   <div class="items">{ben_items}</div>
                 </div>
-
                 <div class="side">
                   <div class="side-head">競品</div>
-                  <div class="tag-row">
-                    <div class="tag">{tag_name}：</div>
-                    <div class="count">{comp_cnt}</div>
-                  </div>
+                  <div class="tag-row"><div class="tag">{tag_name}：</div><div class="count">{comp_cnt}</div></div>
                   <div class="items">{comp_items}</div>
                 </div>
               </div>
@@ -339,5 +291,4 @@ else:
 
     quad_parts.append("</div>")
 
-    html_block = css_white + "\n" + "\n".join(quad_parts)
-    components.html(html_block, height=720, scrolling=True)
+    components.html(css_white + "\n" + "\n".join(quad_parts), height=720, scrolling=True)

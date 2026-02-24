@@ -290,7 +290,7 @@ else:
       /* ✅ 兩欄條列：節省高度 + 字體放大（方便貼簡報） */
       .items{
         font-size: 14px;
-        line-height: 1.5;
+        line-height: 1.55;
         color:#111;
         margin: 0;
         padding-left: 18px;   /* list indent */
@@ -300,7 +300,12 @@ else:
       .items li{
         break-inside: avoid;
         -webkit-column-break-inside: avoid;
-        margin: 0 0 4px 0;
+        margin: 0 0 6px 0;
+
+        /* ✅ 每筆不換行；太長用省略號 */
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       .empty{ color:#666; font-style:italic; }
     </style>

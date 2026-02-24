@@ -1,7 +1,9 @@
 import io
+import html
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="P2｜品牌象限分組", layout="wide")
 
@@ -34,7 +36,7 @@ STORE_UI_COL = "門店"
 INCLUDE_COL = "帶入象限分析"
 ADDRESS_COL = "地址"
 
-# 你要新增的欄位：本/競品（實際欄名不確定，先做候選）
+# 本/競品欄位候選
 COMP_COL_CANDIDATES = ["本/競品", "本競品", "本品/競品", "本品競品", "類別", "類型"]
 
 # =========================
@@ -54,11 +56,19 @@ def to_numeric_series(s: pd.Series) -> pd.Series:
     out = np.where(is_pct, out / 100.0, out)
     return pd.Series(out, index=s.index, dtype="float64")
 
-def find_first_existing_col(df_: pd.DataFrame, candidates: list[str]):
+def find_first_existing_col(df_: pd.DataFrame, candidates):
     for c in candidates:
         if c in df_.columns:
             return c
     return None
+
+def normalize_side(v: str) -> str:
+    s = str(v).strip()
+    if "本" in s:
+        return "本品"
+    if "競" in s:
+        return "競品"
+    return s
 
 # =========================
 # Validate required columns
@@ -70,7 +80,7 @@ if missing:
     st.stop()
 
 # =========================
-# Prepare data
+# Prepare base data (全資料，不做分區/城市等細分)
 # =========================
 df = df.copy()
 
@@ -96,55 +106,59 @@ df = df.dropna(subset=["_x_raw", "_y_raw"]).copy()
 df["_x"] = df["_x_raw"].where(df["_x_raw"].abs() <= 1.5, df["_x_raw"] / 100.0)
 df["_y"] = df["_y_raw"]
 
+# 先找本/競品欄位（用全資料找，避免篩選後消失）
+comp_col = find_first_existing_col(df, COMP_COL_CANDIDATES)
+
 # =========================
 # UI
 # =========================
 st.title("P2｜品牌象限分組（不做分區/城市等細分）")
 
-# ✅ P2 只做品牌篩選（不做城市/分區/商圈）
-brands = sorted(df[BRAND_COL].dropna().astype(str).unique().tolist())
-brand_pick = st.multiselect("品牌（多選）", options=brands, default=brands)
+cut_mode = st.radio("分界點計算方式", ["平均值", "中位數"], index=0, horizontal=True)
 
-fdf = df[df[BRAND_COL].astype(str).isin(brand_pick)].copy() if brand_pick else df.iloc[0:0].copy()
+# ✅ 固定分界：永遠用「全資料 df」算，不受品牌選擇影響
+df_all = df.copy()
+
+if cut_mode == "平均值":
+    x_cut = float(df_all["_x"].mean())
+    y_cut = float(df_all["_y"].mean())
+else:
+    x_cut = float(df_all["_x"].median())
+    y_cut = float(df_all["_y"].median())
+
+conds = [
+    (df_all["_x"] >= x_cut) & (df_all["_y"] >= y_cut),
+    (df_all["_x"] <  x_cut) & (df_all["_y"] >= y_cut),
+    (df_all["_x"] <  x_cut) & (df_all["_y"] <  y_cut),
+    (df_all["_x"] >= x_cut) & (df_all["_y"] <  y_cut),
+]
+q_labels = ["第一象限", "第二象限", "第三象限", "第四象限"]
+df_all["象限"] = np.select(conds, q_labels, default="未分類")
+
+q_order_map = {"第一象限": 1, "第二象限": 2, "第三象限": 3, "第四象限": 4}
+df_all["_q_order"] = df_all["象限"].map(q_order_map).fillna(99).astype(int)
+
+# ✅ 品牌篩選：僅影響顯示（不影響象限計算）
+brands = sorted(df_all[BRAND_COL].dropna().astype(str).unique().tolist())
+brand_pick = st.multiselect(
+    "品牌（多選，僅影響顯示，不影響象限分界/分類）",
+    options=brands,
+    default=brands
+)
+
+fdf = df_all[df_all[BRAND_COL].astype(str).isin(brand_pick)].copy() if brand_pick else df_all.iloc[0:0].copy()
 if len(fdf) == 0:
     st.warning("目前品牌篩選結果為空，請調整選擇。")
     st.stop()
 
-cut_mode = st.radio("分界點計算方式", ["平均值", "中位數"], index=0, horizontal=True)
-
-# ✅ 分界用「品牌篩選後」資料計算（跟 p1 動態一致）
-if cut_mode == "平均值":
-    x_cut = float(fdf["_x"].mean())
-    y_cut = float(fdf["_y"].mean())
-else:
-    x_cut = float(fdf["_x"].median())
-    y_cut = float(fdf["_y"].median())
-
 c1, c2, c3 = st.columns(3)
 c1.metric("X 分界值（成長率）", f"{x_cut:.2%}")
 c2.metric("Y 分界值（回推平均營業額）", f"{y_cut:,.2f}")
-c3.metric("資料筆數", f"{len(fdf):,}")
-
-# =========================
-# Quadrant classification (與 p1 同軸向)
-# =========================
-conds = [
-    (fdf["_x"] >= x_cut) & (fdf["_y"] >= y_cut),
-    (fdf["_x"] <  x_cut) & (fdf["_y"] >= y_cut),
-    (fdf["_x"] <  x_cut) & (fdf["_y"] <  y_cut),
-    (fdf["_x"] >= x_cut) & (fdf["_y"] <  y_cut),
-]
-q_labels = ["第一象限", "第二象限", "第三象限", "第四象限"]
-fdf["象限"] = np.select(conds, q_labels, default="未分類")
-
-q_order_map = {"第一象限": 1, "第二象限": 2, "第三象限": 3, "第四象限": 4}
-fdf["_q_order"] = fdf["象限"].map(q_order_map).fillna(99).astype(int)
+c3.metric("顯示筆數（篩選後）", f"{len(fdf):,}")
 
 # =========================
 # Output table (欄位跟 p1 明細一致 + 本/競品放第一欄)
 # =========================
-comp_col = find_first_existing_col(fdf, COMP_COL_CANDIDATES)
-
 detail_cols = []
 if comp_col is not None:
     detail_cols.append(comp_col)      # 本/競品（第一欄）
@@ -158,7 +172,7 @@ detail_cols += [
     ADDRESS_COL,
     CIRCLE_COL,
     Y_COL,     # 回推平均營業額（Y）
-    X_COL,     # 成長率（X）—顯示原欄位（可能是 0.32 或 32，保留原始）
+    X_COL,     # 成長率（X）
     "象限",
 ]
 
@@ -173,24 +187,15 @@ out_df = (
 st.subheader("品牌分組後門店明細（含象限）")
 st.dataframe(out_df, width="stretch")
 
-
-import html
-import streamlit.components.v1 as components
-
+# =========================
+# Quadrant dashboard (白底黑字)
+# =========================
 st.markdown("---")
 st.subheader("象限儀表板（本品 / 競品）")
 
 if comp_col is None:
     st.warning("找不到『本/競品』欄位，無法產生象限儀表板。請確認資料來源是否有本品/競品標記欄位（例如：本/競品）。")
 else:
-    def normalize_side(v: str) -> str:
-        s = str(v).strip()
-        if "本" in s:
-            return "本品"
-        if "競" in s:
-            return "競品"
-        return s
-
     q_meta = {
         "第一象限": {"desc": "高營收/高成長率", "tag": "明星"},
         "第二象限": {"desc": "高營收/低成長率", "tag": "金牛"},
@@ -198,11 +203,12 @@ else:
         "第四象限": {"desc": "低營收/高成長率", "tag": "潛力"},
     }
 
+    # 位置：左上Q2、右上Q1、左下Q3、右下Q4
     grid_order = [
-        ("第二象限", "q2"),
-        ("第一象限", "q1"),
-        ("第三象限", "q3"),
-        ("第四象限", "q4"),
+        "第二象限",
+        "第一象限",
+        "第三象限",
+        "第四象限",
     ]
 
     def build_items(df_part: pd.DataFrame) -> str:
@@ -215,29 +221,32 @@ else:
     dash_df = fdf.copy()
     dash_df["_side_norm"] = dash_df[comp_col].apply(normalize_side)
 
-    css = """
+    css_white = """
     <style>
+      body { background:#ffffff; color:#111111; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",Arial,sans-serif; }
+
       .quad-grid{
         display:grid;
         grid-template-columns: 1fr 1fr;
         gap: 12px;
       }
       .quad{
-        border: 1px solid rgba(255,255,255,0.25);
+        border: 1px solid rgba(0,0,0,0.18);
         border-radius: 10px;
         padding: 10px 12px;
-        background: rgba(255,255,255,0.02);
+        background: #ffffff;
       }
       .quad-title{
         text-align:center;
-        font-weight: 700;
+        font-weight: 800;
         font-size: 16px;
-        margin-bottom: 6px;
+        margin-bottom: 4px;
+        color:#111111;
       }
       .quad-sub{
         text-align:center;
         font-size: 12px;
-        opacity: 0.85;
+        color:#333333;
         margin-bottom: 10px;
       }
       .inner-grid{
@@ -246,15 +255,16 @@ else:
         gap: 10px;
       }
       .side{
-        border: 1px solid rgba(255,255,255,0.22);
+        border: 1px solid rgba(0,0,0,0.16);
         border-radius: 8px;
         padding: 8px 10px;
         min-height: 140px;
-        background: rgba(255,255,255,0.015);
+        background: #ffffff;
       }
       .side-head{
-        font-weight:700;
+        font-weight: 800;
         margin-bottom: 6px;
+        color:#111111;
       }
       .tag-row{
         display:flex;
@@ -262,24 +272,29 @@ else:
         justify-content: space-between;
         font-size: 13px;
         margin-bottom: 6px;
+        color:#111111;
       }
-      .tag{ font-weight:700; }
-      .count{ font-weight:700; opacity: 0.95; }
+      .tag{ font-weight:800; }
+      .count{ font-weight:800; color:#111111; }
       .items{
         font-size: 12px;
         line-height: 1.35;
-        white-space: normal;
-        max-height: 220px;     /* ✅ 太多店時可捲動 */
+        color:#111111;
+        max-height: 220px;
         overflow: auto;
         padding-right: 4px;
       }
-      .empty{ opacity:0.65; font-style: italic; }
+      .empty{ color:#666666; font-style: italic; }
+
+      .items::-webkit-scrollbar { width: 8px; }
+      .items::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.25); border-radius: 10px; }
+      .items::-webkit-scrollbar-track { background: rgba(0,0,0,0.06); border-radius: 10px; }
     </style>
     """
 
     quad_parts = ['<div class="quad-grid">']
 
-    for q_name, _ in grid_order:
+    for q_name in grid_order:
         desc = q_meta[q_name]["desc"]
         tag_name = q_meta[q_name]["tag"]
 
@@ -324,7 +339,5 @@ else:
 
     quad_parts.append("</div>")
 
-    html_block = css + "\n" + "\n".join(quad_parts)
-
-    # ✅ 用 components.html 強制渲染 HTML（不會顯示成原始碼）
-    components.html(html_block, height=700, scrolling=True)
+    html_block = css_white + "\n" + "\n".join(quad_parts)
+    components.html(html_block, height=720, scrolling=True)

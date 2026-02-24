@@ -175,15 +175,14 @@ st.dataframe(out_df, width="stretch")
 
 
 import html
+import streamlit.components.v1 as components
 
 st.markdown("---")
 st.subheader("象限儀表板（本品 / 競品）")
 
-# 若找不到本/競品欄位，直接提示（避免整段報錯）
 if comp_col is None:
     st.warning("找不到『本/競品』欄位，無法產生象限儀表板。請確認資料來源是否有本品/競品標記欄位（例如：本/競品）。")
 else:
-    # 讓本/競品值標準化（避免資料裡是「本品店」、「競品店」之類）
     def normalize_side(v: str) -> str:
         s = str(v).strip()
         if "本" in s:
@@ -192,7 +191,6 @@ else:
             return "競品"
         return s
 
-    # 四象限標題與說明、以及店類型名稱
     q_meta = {
         "第一象限": {"desc": "高營收/高成長率", "tag": "明星"},
         "第二象限": {"desc": "高營收/低成長率", "tag": "金牛"},
@@ -200,7 +198,6 @@ else:
         "第四象限": {"desc": "低營收/高成長率", "tag": "潛力"},
     }
 
-    # 象限位置：Q1 右上、Q2 左上、Q3 左下、Q4 右下
     grid_order = [
         ("第二象限", "q2"),
         ("第一象限", "q1"),
@@ -208,7 +205,6 @@ else:
         ("第四象限", "q4"),
     ]
 
-    # 組合顯示文字：品牌 + 空格 + 門店
     def build_items(df_part: pd.DataFrame) -> str:
         if len(df_part) == 0:
             return '<div class="empty">（無）</div>'
@@ -216,101 +212,88 @@ else:
         items = [html.escape(x.strip()) for x in items if x.strip()]
         return "<br>".join(items) if items else '<div class="empty">（無）</div>'
 
-    # 先標準化本/競品欄位（只在儀表板展示用，不改你原 fdf）
     dash_df = fdf.copy()
     dash_df["_side_norm"] = dash_df[comp_col].apply(normalize_side)
 
-    # CSS + HTML
-    st.markdown(
-        """
-        <style>
-          .quad-grid{
-            display:grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-          }
-          .quad{
-            border: 1px solid rgba(255,255,255,0.25);
-            border-radius: 10px;
-            padding: 10px 12px;
-            background: rgba(255,255,255,0.02);
-          }
-          .quad-title{
-            text-align:center;
-            font-weight: 700;
-            font-size: 16px;
-            margin-bottom: 6px;
-          }
-          .quad-sub{
-            text-align:center;
-            font-size: 12px;
-            opacity: 0.85;
-            margin-bottom: 10px;
-          }
-          .inner-grid{
-            display:grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-          }
-          .side{
-            border: 1px solid rgba(255,255,255,0.22);
-            border-radius: 8px;
-            padding: 8px 10px;
-            min-height: 140px;
-            background: rgba(255,255,255,0.015);
-          }
-          .side-head{
-            font-weight:700;
-            margin-bottom: 6px;
-          }
-          .tag-row{
-            display:flex;
-            align-items:center;
-            justify-content: space-between;
-            font-size: 13px;
-            margin-bottom: 6px;
-          }
-          .tag{
-            font-weight:700;
-          }
-          .count{
-            font-weight:700;
-            opacity: 0.95;
-          }
-          .items{
-            font-size: 12px;
-            line-height: 1.35;
-            white-space: normal;
-          }
-          .empty{
-            opacity:0.65;
-            font-style: italic;
-          }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
+    css = """
+    <style>
+      .quad-grid{
+        display:grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      .quad{
+        border: 1px solid rgba(255,255,255,0.25);
+        border-radius: 10px;
+        padding: 10px 12px;
+        background: rgba(255,255,255,0.02);
+      }
+      .quad-title{
+        text-align:center;
+        font-weight: 700;
+        font-size: 16px;
+        margin-bottom: 6px;
+      }
+      .quad-sub{
+        text-align:center;
+        font-size: 12px;
+        opacity: 0.85;
+        margin-bottom: 10px;
+      }
+      .inner-grid{
+        display:grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      .side{
+        border: 1px solid rgba(255,255,255,0.22);
+        border-radius: 8px;
+        padding: 8px 10px;
+        min-height: 140px;
+        background: rgba(255,255,255,0.015);
+      }
+      .side-head{
+        font-weight:700;
+        margin-bottom: 6px;
+      }
+      .tag-row{
+        display:flex;
+        align-items:center;
+        justify-content: space-between;
+        font-size: 13px;
+        margin-bottom: 6px;
+      }
+      .tag{ font-weight:700; }
+      .count{ font-weight:700; opacity: 0.95; }
+      .items{
+        font-size: 12px;
+        line-height: 1.35;
+        white-space: normal;
+        max-height: 220px;     /* ✅ 太多店時可捲動 */
+        overflow: auto;
+        padding-right: 4px;
+      }
+      .empty{ opacity:0.65; font-style: italic; }
+    </style>
+    """
 
-    # 組裝四象限 HTML
-    quad_html_parts = ['<div class="quad-grid">']
+    quad_parts = ['<div class="quad-grid">']
 
     for q_name, _ in grid_order:
         desc = q_meta[q_name]["desc"]
         tag_name = q_meta[q_name]["tag"]
 
-        # 本品/競品切片
         df_q = dash_df[dash_df["象限"] == q_name].copy()
         df_q_ben = df_q[df_q["_side_norm"] == "本品"].copy()
         df_q_comp = df_q[df_q["_side_norm"] == "競品"].copy()
 
-        # counts（這裡依你的描述：顯示「此篩選條件下屬於本品或競品的資料數」）
         ben_cnt = int(len(df_q_ben))
         comp_cnt = int(len(df_q_comp))
 
         ben_items = build_items(df_q_ben)
         comp_items = build_items(df_q_comp)
 
-        quad_html_parts.append(
+        quad_parts.append(
             f"""
             <div class="quad">
               <div class="quad-title">{q_name}</div>
@@ -339,5 +322,9 @@ else:
             """
         )
 
-    quad_html_parts.append("</div>")
-    st.markdown("\n".join(quad_html_parts), unsafe_allow_html=True)
+    quad_parts.append("</div>")
+
+    html_block = css + "\n" + "\n".join(quad_parts)
+
+    # ✅ 用 components.html 強制渲染 HTML（不會顯示成原始碼）
+    components.html(html_block, height=700, scrolling=True)

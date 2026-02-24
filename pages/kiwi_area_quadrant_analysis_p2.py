@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="P2｜品牌象限分組（全資料）", layout="wide")
+st.set_page_config(page_title="P2｜品牌象限分組", layout="wide")
 
 # =========================
 # Load df from session (uploaded in Home)
@@ -21,11 +21,21 @@ df = load_df_from_session(st.session_state["data_bytes"])
 # =========================
 # Config (與 p1 一致：X=成長率、Y=回推平均營業額)
 # =========================
-X_COL = "2025成長率"
-Y_COL = "2025回推平均營業額"
+X_COL = "2025成長率"           # X = 成長率
+Y_COL = "2025回推平均營業額"   # Y = 回推平均營業額
 
 BRAND_COL = "品牌"
-INCLUDE_COL = "帶入象限分析"  # 只取 y
+ZONE_COL = "分區編碼"
+CITY_COL = "城市"
+CIRCLE_COL = "商圈名稱(kiwi)"
+MATCHED_COL = "matched_name"
+STORE_UI_COL = "門店"
+
+INCLUDE_COL = "帶入象限分析"
+ADDRESS_COL = "地址"
+
+# 你要新增的欄位：本/競品（實際欄名不確定，先做候選）
+COMP_COL_CANDIDATES = ["本/競品", "本競品", "本品/競品", "本品競品", "類別", "類型"]
 
 # =========================
 # Helpers
@@ -44,17 +54,23 @@ def to_numeric_series(s: pd.Series) -> pd.Series:
     out = np.where(is_pct, out / 100.0, out)
     return pd.Series(out, index=s.index, dtype="float64")
 
+def find_first_existing_col(df_: pd.DataFrame, candidates: list[str]):
+    for c in candidates:
+        if c in df_.columns:
+            return c
+    return None
+
 # =========================
 # Validate required columns
 # =========================
-need_cols = [X_COL, Y_COL, BRAND_COL, INCLUDE_COL]
+need_cols = [X_COL, Y_COL, BRAND_COL, INCLUDE_COL, MATCHED_COL]
 missing = [c for c in need_cols if c not in df.columns]
 if missing:
     st.error(f"缺少欄位：{missing}\n目前欄位：{list(df.columns)}")
     st.stop()
 
 # =========================
-# Prepare data (全資料，不做任何細分篩選)
+# Prepare data
 # =========================
 df = df.copy()
 
@@ -62,60 +78,97 @@ df = df.copy()
 df[INCLUDE_COL] = df[INCLUDE_COL].astype(str).str.strip().str.lower()
 df = df[df[INCLUDE_COL] == "y"].copy()
 
+# 門店欄（matched_name → 門店）
+df[STORE_UI_COL] = (
+    df[MATCHED_COL].astype(str)
+    .replace({"nan": np.nan})
+    .fillna("")
+    .str.strip()
+    .replace({"": np.nan})
+)
+
 # 轉數值
 df["_x_raw"] = to_numeric_series(df[X_COL])  # 成長率
 df["_y_raw"] = to_numeric_series(df[Y_COL])  # 回推平均營業額
 df = df.dropna(subset=["_x_raw", "_y_raw"]).copy()
 
-# 成長率逐筆偵測（與 p1 同邏輯）：32.15 -> 0.3215
+# 成長率逐筆偵測：32.15 -> 0.3215（與 p1 一致）
 df["_x"] = df["_x_raw"].where(df["_x_raw"].abs() <= 1.5, df["_x_raw"] / 100.0)
 df["_y"] = df["_y_raw"]
 
 # =========================
-# UI: choose cut mode
+# UI
 # =========================
-st.title("P2｜品牌象限分組（全資料）")
+st.title("P2｜品牌象限分組（不做分區/城市等細分）")
+
+# ✅ P2 只做品牌篩選（不做城市/分區/商圈）
+brands = sorted(df[BRAND_COL].dropna().astype(str).unique().tolist())
+brand_pick = st.multiselect("品牌（多選）", options=brands, default=brands)
+
+fdf = df[df[BRAND_COL].astype(str).isin(brand_pick)].copy() if brand_pick else df.iloc[0:0].copy()
+if len(fdf) == 0:
+    st.warning("目前品牌篩選結果為空，請調整選擇。")
+    st.stop()
 
 cut_mode = st.radio("分界點計算方式", ["平均值", "中位數"], index=0, horizontal=True)
 
+# ✅ 分界用「品牌篩選後」資料計算（跟 p1 動態一致）
 if cut_mode == "平均值":
-    x_cut = float(df["_x"].mean())
-    y_cut = float(df["_y"].mean())
+    x_cut = float(fdf["_x"].mean())
+    y_cut = float(fdf["_y"].mean())
 else:
-    x_cut = float(df["_x"].median())
-    y_cut = float(df["_y"].median())
+    x_cut = float(fdf["_x"].median())
+    y_cut = float(fdf["_y"].median())
 
 c1, c2, c3 = st.columns(3)
 c1.metric("X 分界值（成長率）", f"{x_cut:.2%}")
 c2.metric("Y 分界值（回推平均營業額）", f"{y_cut:,.2f}")
-c3.metric("資料筆數", f"{len(df):,}")
+c3.metric("資料筆數", f"{len(fdf):,}")
 
 # =========================
-# Quadrant classification (用全資料分界)
+# Quadrant classification (與 p1 同軸向)
 # =========================
 conds = [
-    (df["_x"] >= x_cut) & (df["_y"] >= y_cut),
-    (df["_x"] <  x_cut) & (df["_y"] >= y_cut),
-    (df["_x"] <  x_cut) & (df["_y"] <  y_cut),
-    (df["_x"] >= x_cut) & (df["_y"] <  y_cut),
+    (fdf["_x"] >= x_cut) & (fdf["_y"] >= y_cut),
+    (fdf["_x"] <  x_cut) & (fdf["_y"] >= y_cut),
+    (fdf["_x"] <  x_cut) & (fdf["_y"] <  y_cut),
+    (fdf["_x"] >= x_cut) & (fdf["_y"] <  y_cut),
 ]
 q_labels = ["第一象限", "第二象限", "第三象限", "第四象限"]
-df["象限"] = np.select(conds, q_labels, default="未分類")
+fdf["象限"] = np.select(conds, q_labels, default="未分類")
 
-# 象限排序鍵（第一、第二、第三、第四）
 q_order_map = {"第一象限": 1, "第二象限": 2, "第三象限": 3, "第四象限": 4}
-df["_q_order"] = df["象限"].map(q_order_map).fillna(99).astype(int)
+fdf["_q_order"] = fdf["象限"].map(q_order_map).fillna(99).astype(int)
 
 # =========================
-# Output: simplest table (full data + quadrant)
-# 排序：品牌 -> 象限（1~4）
+# Output table (欄位跟 p1 明細一致 + 本/競品放第一欄)
 # =========================
-st.subheader("全資料門店明細（含象限分類）")
+comp_col = find_first_existing_col(fdf, COMP_COL_CANDIDATES)
 
-# 若你只想先看關鍵欄位，可以在這裡縮欄位；你說「直接以完整資料補上象限欄位」，所以這裡保留全欄位
-out_df = df.sort_values([BRAND_COL, "_q_order"]).drop(columns=["_q_order"])
+detail_cols = []
+if comp_col is not None:
+    detail_cols.append(comp_col)      # 本/競品（第一欄）
 
-# 顯示筆數可能很大，先給個可調整顯示上限（不影響資料本身）
-max_rows = st.number_input("表格顯示筆數上限（不影響計算）", min_value=100, max_value=50000, value=2000, step=100)
+detail_cols += [
+    BRAND_COL,
+    STORE_UI_COL,
+    ZONE_COL,
+    CITY_COL,
+    "行政區",
+    ADDRESS_COL,
+    CIRCLE_COL,
+    Y_COL,     # 回推平均營業額（Y）
+    X_COL,     # 成長率（X）—顯示原欄位（可能是 0.32 或 32，保留原始）
+    "象限",
+]
 
-st.dataframe(out_df.head(int(max_rows)), width="stretch")
+detail_cols_exist = [c for c in detail_cols if c in fdf.columns]
+
+out_df = (
+    fdf.sort_values([BRAND_COL, "_q_order"])
+       .loc[:, detail_cols_exist]
+       .copy()
+)
+
+st.subheader("品牌分組後門店明細（含象限）")
+st.dataframe(out_df, width="stretch")

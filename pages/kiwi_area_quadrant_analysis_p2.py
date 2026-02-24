@@ -294,7 +294,7 @@ else:
         color:#111;
         margin: 0;
         padding-left: 18px;   /* list indent */
-        column-count: 2;
+        column-count: 1;
         column-gap: 18px;
       }
       .items li{
@@ -303,9 +303,6 @@ else:
         margin: 0 0 6px 0;
 
         /* ✅ 每筆不換行；太長用省略號 */
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
       }
       .empty{ color:#666; font-style:italic; }
     </style>

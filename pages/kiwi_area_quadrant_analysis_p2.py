@@ -111,8 +111,6 @@ st.title("P2｜品牌象限分組（每個品牌各自計算分界）")
 
 cut_mode = st.radio("分界點計算方式", ["平均值", "中位數"], index=0, horizontal=True)
 
-# ✅ 品牌篩選只控制「顯示」，不影響分組運算邏輯
-# （但因為每品牌分界只用該品牌自己的資料，所以選不選其他品牌不會改變該品牌結果）
 brands_all = sorted(df[BRAND_COL].dropna().astype(str).unique().tolist())
 brand_pick = st.multiselect(
     "品牌（多選，僅影響顯示，不影響各品牌分組運算）",
@@ -136,17 +134,6 @@ else:
           .reset_index()
     )
 
-# 只顯示勾選品牌的分界表
-brand_cuts_show = brand_cuts[brand_cuts[BRAND_COL].astype(str).isin(brand_pick)].copy() if brand_pick else brand_cuts.iloc[0:0].copy()
-brand_cuts_show = brand_cuts_show.sort_values(BRAND_COL)
-
-st.subheader("各品牌分界值（用於該品牌門店象限判定）")
-show_cuts = brand_cuts_show.copy()
-show_cuts["X分界(成長率)"] = show_cuts["brand_x_cut"].map(lambda v: f"{v:.2%}")
-show_cuts["Y分界(回推平均營業額)"] = show_cuts["brand_y_cut"].map(lambda v: f"{v:,.2f}")
-show_cuts = show_cuts[[BRAND_COL, "store_cnt", "X分界(成長率)", "Y分界(回推平均營業額)"]].rename(columns={"store_cnt": "筆數"})
-st.dataframe(show_cuts, width="stretch")
-
 # =========================
 # 2) 把品牌分界 merge 回每筆資料，計算「品牌內象限」
 # =========================
@@ -163,6 +150,37 @@ df_all["象限"] = np.select(conds, q_labels, default="未分類")
 
 q_order_map = {"第一象限": 1, "第二象限": 2, "第三象限": 3, "第四象限": 4}
 df_all["_q_order"] = df_all["象限"].map(q_order_map).fillna(99).astype(int)
+
+# =========================
+# 各品牌分界值表（只顯示勾選品牌；並新增四象限筆數欄）
+# =========================
+brand_cuts_show = brand_cuts[brand_cuts[BRAND_COL].astype(str).isin(brand_pick)].copy() if brand_pick else brand_cuts.iloc[0:0].copy()
+brand_cuts_show = brand_cuts_show.sort_values(BRAND_COL)
+
+# 每品牌四象限筆數（以品牌內象限分類後 df_all 統計）
+q_cols_order = ["第一象限", "第二象限", "第三象限", "第四象限"]
+brand_q_counts = (
+    df_all.groupby([BRAND_COL, "象限"])
+          .size()
+          .unstack(fill_value=0)
+          .reindex(columns=q_cols_order, fill_value=0)
+          .reset_index()
+)
+
+st.subheader("各品牌分界值（用於該品牌門店象限判定）")
+show_cuts = brand_cuts_show.copy()
+show_cuts["X分界(成長率)"] = show_cuts["brand_x_cut"].map(lambda v: f"{v:.2%}")
+show_cuts["Y分界(回推平均營業額)"] = show_cuts["brand_y_cut"].map(lambda v: f"{v:,.2f}")
+show_cuts = show_cuts[[BRAND_COL, "store_cnt", "X分界(成長率)", "Y分界(回推平均營業額)"]].rename(columns={"store_cnt": "筆數"})
+
+# merge 四象限計數
+show_cuts = show_cuts.merge(brand_q_counts, on=BRAND_COL, how="left").fillna(0)
+for c in q_cols_order:
+    show_cuts[c] = show_cuts[c].astype(int)
+
+# 欄位順序：品牌、筆數、X分界、Y分界、Q1~Q4
+show_cuts = show_cuts[[BRAND_COL, "筆數", "X分界(成長率)", "Y分界(回推平均營業額)"] + q_cols_order]
+st.dataframe(show_cuts, width="stretch")
 
 # ✅ 最後才套 brand_pick 做「顯示過濾」
 fdf = df_all[df_all[BRAND_COL].astype(str).isin(brand_pick)].copy() if brand_pick else df_all.iloc[0:0].copy()
@@ -204,7 +222,7 @@ st.subheader("品牌內象限分組後門店明細（含象限）")
 st.dataframe(out_df, width="stretch")
 
 # =========================
-# Quadrant dashboard (白底黑字)
+# Quadrant dashboard (白底黑字 + 不使用內部捲軸 + 可下載 PNG)
 # =========================
 st.markdown("---")
 st.subheader("象限儀表板（本品 / 競品）")
@@ -219,6 +237,7 @@ else:
         "第四象限": {"desc": "低營收/高成長率", "tag": "潛力"},
     }
 
+    # 位置：左上Q2、右上Q1、左下Q3、右下Q4
     grid_order = ["第二象限", "第一象限", "第三象限", "第四象限"]
 
     def build_items(df_part: pd.DataFrame) -> str:
@@ -231,9 +250,28 @@ else:
     dash_df = fdf.copy()
     dash_df["_side_norm"] = dash_df[comp_col].apply(normalize_side)
 
+    # 估算需要的高度，避免 iframe 內部捲軸（依最大清單筆數估算）
+    max_items = 0
+    for q in ["第一象限", "第二象限", "第三象限", "第四象限"]:
+        for side in ["本品", "競品"]:
+            cnt = dash_df[(dash_df["象限"] == q) & (dash_df["_side_norm"] == side)].shape[0]
+            max_items = max(max_items, cnt)
+
+    # 13px字體 + 行距，抓每筆約 20px，再加上框架固定高度
+    estimated_height = 560 + max_items * 20
+    estimated_height = max(760, estimated_height)
+    # 避免極端長度把頁面拉爆：如你確定要完全不限制，可把下一行移除
+    estimated_height = min(6000, estimated_height)
+
     css_white = """
     <style>
       body { background:#ffffff; color:#111111; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",Arial,sans-serif; }
+
+      .toolbar{ display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+      .btn{ background:#111; color:#fff; border:none; border-radius:8px; padding:8px 10px; font-weight:700; cursor:pointer; }
+      .btn:hover{ opacity:0.9; }
+      .hint{ font-size:12px; color:#444; }
+
       .quad-grid{ display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
       .quad{ border:1px solid rgba(0,0,0,0.18); border-radius:10px; padding:10px 12px; background:#fff; }
       .quad-title{ text-align:center; font-weight:800; font-size:16px; margin-bottom:4px; color:#111; }
@@ -244,15 +282,23 @@ else:
       .tag-row{ display:flex; align-items:center; justify-content:space-between; font-size:13px; margin-bottom:6px; color:#111; }
       .tag{ font-weight:800; }
       .count{ font-weight:800; color:#111; }
-      .items{ font-size:12px; line-height:1.35; color:#111; max-height:220px; overflow:auto; padding-right:4px; }
+
+      /* ✅ 清單字體放大、取消內部捲動，讓內容自然撐開 */
+      .items{ font-size:13px; line-height:1.45; color:#111; white-space:normal; }
       .empty{ color:#666; font-style:italic; }
-      .items::-webkit-scrollbar { width: 8px; }
-      .items::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.25); border-radius: 10px; }
-      .items::-webkit-scrollbar-track { background: rgba(0,0,0,0.06); border-radius: 10px; }
     </style>
     """
 
-    quad_parts = ['<div class="quad-grid">']
+    quad_parts = [
+        """
+        <div class="toolbar">
+          <button class="btn" onclick="downloadDashboard()">下載圖片（PNG）</button>
+          <span class="hint">（會將下方整個象限儀表板輸出成圖片）</span>
+        </div>
+        <div id="dashboard">
+          <div class="quad-grid">
+        """
+    ]
 
     for q_name in grid_order:
         desc = q_meta[q_name]["desc"]
@@ -289,6 +335,26 @@ else:
             """
         )
 
-    quad_parts.append("</div>")
+    quad_parts.append("</div></div>")  # close quad-grid + dashboard
 
-    components.html(css_white + "\n" + "\n".join(quad_parts), height=720, scrolling=True)
+    script = """
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+    <script>
+      function downloadDashboard(){
+        const el = document.getElementById('dashboard');
+        if(!el){ alert('找不到儀表板'); return; }
+
+        html2canvas(el, {backgroundColor: '#ffffff', scale: 2}).then(canvas => {
+          const link = document.createElement('a');
+          link.download = '象限儀表板.png';
+          link.href = canvas.toDataURL('image/png');
+          link.click();
+        });
+      }
+    </script>
+    """
+
+    html_block = css_white + "\n" + "\n".join(quad_parts) + "\n" + script
+
+    # scrolling=False：避免 iframe 自己出現捲動條
+    components.html(html_block, height=int(estimated_height), scrolling=False)

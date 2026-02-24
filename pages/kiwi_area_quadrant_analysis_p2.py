@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+import math
 
 st.set_page_config(page_title="P2｜品牌象限分組", layout="wide")
 
@@ -245,7 +246,11 @@ else:
             return '<div class="empty">（無）</div>'
         items = (df_part[BRAND_COL].astype(str).fillna("") + " " + df_part[STORE_UI_COL].astype(str).fillna("")).tolist()
         items = [html.escape(x.strip()) for x in items if x.strip()]
-        return "<br>".join(items) if items else '<div class="empty">（無）</div>'
+        if not items:
+            return '<div class="empty">（無）</div>'
+        lis = "
+".join([f"<li>{it}</li>" for it in items])
+        return f"<ul class=\"items\">{lis}</ul>"
 
     dash_df = fdf.copy()
     dash_df["_side_norm"] = dash_df[comp_col].apply(normalize_side)
@@ -258,7 +263,7 @@ else:
             max_items = max(max_items, cnt)
 
     # 13px字體 + 行距，抓每筆約 20px，再加上框架固定高度
-    estimated_height = 560 + max_items * 20
+    estimated_height = 560 + int(math.ceil(max_items / 2)) * 22  # 兩欄顯示，行數約減半；字體略放大
     estimated_height = max(760, estimated_height)
     # 避免極端長度把頁面拉爆：如你確定要完全不限制，可把下一行移除
     estimated_height = min(6000, estimated_height)
@@ -277,14 +282,27 @@ else:
       .quad-title{ text-align:center; font-weight:800; font-size:16px; margin-bottom:4px; color:#111; }
       .quad-sub{ text-align:center; font-size:12px; color:#333; margin-bottom:10px; }
       .inner-grid{ display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
-      .side{ border:1px solid rgba(0,0,0,0.16); border-radius:8px; padding:8px 10px; min-height:140px; background:#fff; }
+      .side{ border:1px solid rgba(0,0,0,0.16); border-radius:8px; padding:8px 10px; min-height:90px; background:#fff; }
       .side-head{ font-weight:800; margin-bottom:6px; color:#111; }
       .tag-row{ display:flex; align-items:center; justify-content:space-between; font-size:13px; margin-bottom:6px; color:#111; }
       .tag{ font-weight:800; }
       .count{ font-weight:800; color:#111; }
 
-      /* ✅ 清單字體放大、取消內部捲動，讓內容自然撐開 */
-      .items{ font-size:13px; line-height:1.45; color:#111; white-space:normal; }
+      /* ✅ 兩欄條列：節省高度 + 字體放大（方便貼簡報） */
+      .items{
+        font-size: 14px;
+        line-height: 1.5;
+        color:#111;
+        margin: 0;
+        padding-left: 18px;   /* list indent */
+        column-count: 2;
+        column-gap: 18px;
+      }
+      .items li{
+        break-inside: avoid;
+        -webkit-column-break-inside: avoid;
+        margin: 0 0 4px 0;
+      }
       .empty{ color:#666; font-style:italic; }
     </style>
     """

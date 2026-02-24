@@ -227,7 +227,7 @@ st.dataframe(out_df, width="stretch")
 # =========================
 st.markdown("---")
 st.subheader("象限儀表板（本品 / 競品）")
-height_multiplier = st.slider("儀表板高度倍率（避免截斷）", min_value=1.0, max_value=3.0, value=1.6, step=0.1)
+height_multiplier = st.slider("儀表板高度倍率（避免截斷）", min_value=0.2, max_value=3.0, value=1.6, step=0.05)
 
 if comp_col is None:
     st.warning("找不到『本/競品』欄位，無法產生象限儀表板。")

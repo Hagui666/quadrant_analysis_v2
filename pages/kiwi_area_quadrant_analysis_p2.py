@@ -286,25 +286,7 @@ else:
         )
     legend_html = '<div class="legend">' + ''.join(legend_items) + '</div>' if legend_items else ''
 
-    # 估算需要的高度，避免 iframe 內部捲軸
-    # 以「每個象限」中本品/競品兩邊較大的筆數做為該象限高度基準，再取每一列(上/下)兩個象限的最大高度
-    line_px = 24  # 每筆清單大約高度（含行距）
-    quad_base = 150  # 象限框架固定高度（標題/間距/邊框等）
-
-    quad_max = {}
-    for q in ["第一象限", "第二象限", "第三象限", "第四象限"]:
-        ben_cnt = dash_df[(dash_df["象限"] == q) & (dash_df["_side_norm"] == "本品")].shape[0]
-        comp_cnt = dash_df[(dash_df["象限"] == q) & (dash_df["_side_norm"] == "競品")].shape[0]
-        quad_max[q] = max(ben_cnt, comp_cnt)
-
-    # 上排：第二象限 & 第一象限；下排：第三象限 & 第四象限
-    top_lines = max(quad_max.get("第二象限", 0), quad_max.get("第一象限", 0))
-    bot_lines = max(quad_max.get("第三象限", 0), quad_max.get("第四象限", 0))
-
-    estimated_height = 90 + (quad_base + top_lines * line_px) + (quad_base + bot_lines * line_px)
-    estimated_height = max(860, estimated_height)
-    # 仍提供上限避免極端把頁面拉爆；如你想完全不限制可以把下一行移除
-    estimated_height = min(9000, int(estimated_height))
+    # 由 JS 自動回傳高度（避免白底區塊過長或被截斷），此處不再手動估算 iframe 高度。
 
     css_white = """
     <style>
@@ -443,6 +425,31 @@ else:
     script = """
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
     <script>
+      // === Streamlit iframe auto-resize ===
+      function reportHeight(){
+        try{
+          const h = Math.max(
+            document.documentElement.scrollHeight,
+            document.body.scrollHeight,
+            document.documentElement.offsetHeight,
+            document.body.offsetHeight
+          );
+          // Streamlit 內建訊息格式（components.html 也適用）
+          window.parent.postMessage(
+            {isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: h},
+            "*"
+          );
+        }catch(e){}
+      }
+
+      // 初次與資源載入後回報
+      window.addEventListener("load", () => { reportHeight(); setTimeout(reportHeight, 200); setTimeout(reportHeight, 800); });
+
+      // 內容變動即回報（字體/清單變動/展開收合）
+      const ro = new ResizeObserver(() => { reportHeight(); });
+      ro.observe(document.body);
+
+      // === PNG download ===
       function downloadDashboard(){
         const el = document.getElementById('dashboard');
         if(!el){ alert('找不到儀表板'); return; }
@@ -460,4 +467,4 @@ else:
     html_block = css_white + "\n" + "\n".join(quad_parts) + "\n" + script
 
     # scrolling=False：避免 iframe 自己出現捲動條
-    components.html(html_block, height=int(estimated_height), scrolling=False)
+    components.html(html_block, height=900, scrolling=False)  # 初始高度，後續由 JS 自動回傳實際高度

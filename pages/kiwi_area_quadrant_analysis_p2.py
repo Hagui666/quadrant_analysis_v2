@@ -241,31 +241,61 @@ else:
     # 位置：左上Q2、右上Q1、左下Q3、右下Q4
     grid_order = ["第二象限", "第一象限", "第三象限", "第四象限"]
 
-    def build_items(df_part: pd.DataFrame) -> str:
+    def build_items(df_part: pd.DataFrame, brand_color_map: dict) -> str:
+        """
+        產生「只顯示門店名」的清單，並用品牌顏色的圓點做前綴，方便視覺辨識。
+        """
         if len(df_part) == 0:
             return '<div class="empty">（無）</div>'
-        items = (df_part[BRAND_COL].astype(str).fillna("") + " " + df_part[STORE_UI_COL].astype(str).fillna("")).tolist()
-        items = [html.escape(x.strip()) for x in items if x.strip()]
-        if not items:
+
+        stores = df_part[STORE_UI_COL].astype(str).fillna("").tolist()
+        brands = df_part[BRAND_COL].astype(str).fillna("").tolist()
+
+        lis_parts = []
+        for b, s in zip(brands, stores):
+            s = (s or "").strip()
+            if not s:
+                continue
+            color = brand_color_map.get(b, "#111111")
+            lis_parts.append(
+                f'<li title="{html.escape(str(b))}">'
+                f'<span class="dot" style="background:{html.escape(color)}"></span>'
+                f'<span class="name">{html.escape(s)}</span>'
+                f'</li>'
+            )
+
+        if not lis_parts:
             return '<div class="empty">（無）</div>'
-        lis = "\n".join([f"<li>{it}</li>" for it in items])
-        return f"<ul class=\"items\">{lis}</ul>"
+
+        return '<ul class="items">' + "".join(lis_parts) + '</ul>'
 
     dash_df = fdf.copy()
     dash_df["_side_norm"] = dash_df[comp_col].apply(normalize_side)
 
-    # 估算需要的高度，避免 iframe 內部捲軸（依最大清單筆數估算）
-    max_items = 0
-    for q in ["第一象限", "第二象限", "第三象限", "第四象限"]:
-        for side in ["本品", "競品"]:
-            cnt = dash_df[(dash_df["象限"] == q) & (dash_df["_side_norm"] == side)].shape[0]
-            max_items = max(max_items, cnt)
+    # 依品牌建立固定顏色對應（用於清單前綴圓點）
+    uniq_brands = sorted(dash_df[BRAND_COL].dropna().astype(str).unique().tolist())
+    palette = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf']
+    brand_color_map = {b: palette[i % len(palette)] for i, b in enumerate(uniq_brands)}
 
-    # 13px字體 + 行距，抓每筆約 20px，再加上框架固定高度
-    estimated_height = 560 + int(math.ceil(max_items / 2)) * 22  # 兩欄顯示，行數約減半；字體略放大
-    estimated_height = max(760, estimated_height)
-    # 避免極端長度把頁面拉爆：如你確定要完全不限制，可把下一行移除
-    estimated_height = min(6000, estimated_height)
+    # 估算需要的高度，避免 iframe 內部捲軸
+    # 以「每個象限」中本品/競品兩邊較大的筆數做為該象限高度基準，再取每一列(上/下)兩個象限的最大高度
+    line_px = 24  # 每筆清單大約高度（含行距）
+    quad_base = 150  # 象限框架固定高度（標題/間距/邊框等）
+
+    quad_max = {}
+    for q in ["第一象限", "第二象限", "第三象限", "第四象限"]:
+        ben_cnt = dash_df[(dash_df["象限"] == q) & (dash_df["_side_norm"] == "本品")].shape[0]
+        comp_cnt = dash_df[(dash_df["象限"] == q) & (dash_df["_side_norm"] == "競品")].shape[0]
+        quad_max[q] = max(ben_cnt, comp_cnt)
+
+    # 上排：第二象限 & 第一象限；下排：第三象限 & 第四象限
+    top_lines = max(quad_max.get("第二象限", 0), quad_max.get("第一象限", 0))
+    bot_lines = max(quad_max.get("第三象限", 0), quad_max.get("第四象限", 0))
+
+    estimated_height = 90 + (quad_base + top_lines * line_px) + (quad_base + bot_lines * line_px)
+    estimated_height = max(860, estimated_height)
+    # 仍提供上限避免極端把頁面拉爆；如你想完全不限制可以把下一行移除
+    estimated_height = min(9000, int(estimated_height))
 
     css_white = """
     <style>
@@ -289,20 +319,32 @@ else:
 
       /* ✅ 兩欄條列：節省高度 + 字體放大（方便貼簡報） */
       .items{
-        font-size: 14px;
+        list-style: none;     /* 取消預設黑點 */
+        padding: 0;
+        margin: 0;
+        font-size: 14px;      /* 放大一點，方便貼簡報 */
         line-height: 1.55;
         color:#111;
-        margin: 0;
-        padding-left: 18px;   /* list indent */
-        column-count: 1;
-        column-gap: 18px;
       }
       .items li{
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 0 6px 0;
         break-inside: avoid;
         -webkit-column-break-inside: avoid;
-        margin: 0 0 6px 0;
-
-        /* ✅ 每筆不換行；太長用省略號 */
+      }
+      .dot{
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        display: inline-block;
+        flex: 0 0 9px;
+        box-shadow: 0 0 0 1px rgba(0,0,0,0.15);
+      }
+      .name{
+        display: inline-block;
+        white-space: nowrap;
       }
       .empty{ color:#666; font-style:italic; }
     </style>
@@ -330,8 +372,8 @@ else:
         ben_cnt = int(len(df_q_ben))
         comp_cnt = int(len(df_q_comp))
 
-        ben_items = build_items(df_q_ben)
-        comp_items = build_items(df_q_comp)
+        ben_items = build_items(df_q_ben, brand_color_map)
+        comp_items = build_items(df_q_comp, brand_color_map)
 
         quad_parts.append(
             f"""

@@ -309,6 +309,8 @@ else:
       .count{ font-weight:800; color:#111; }
 
       /* ✅ 兩欄條列：節省高度 + 字體放大（方便貼簡報） */
+      #dashboard{height:auto; overflow:visible;}
+
       .legend{
         display:flex;
         flex-wrap: wrap;
@@ -454,11 +456,45 @@ else:
         const el = document.getElementById('dashboard');
         if(!el){ alert('找不到儀表板'); return; }
 
-        html2canvas(el, {backgroundColor: '#ffffff', scale: 2}).then(canvas => {
+        // 暫存原樣式
+        const prevOverflow = el.style.overflow;
+        const prevHeight = el.style.height;
+        const prevWidth  = el.style.width;
+
+        // 讓內容完整展開再截圖（避免只截到可視區）
+        el.style.overflow = 'visible';
+        el.style.height = 'auto';
+        el.style.width  = 'auto';
+
+        // 取得完整內容尺寸（含超出可視範圍）
+        const fullH = Math.max(el.scrollHeight, el.offsetHeight);
+        const fullW = Math.max(el.scrollWidth,  el.offsetWidth);
+
+        html2canvas(el, {
+          backgroundColor: '#ffffff',
+          scale: 2,
+          width: fullW,
+          height: fullH,
+          windowWidth: fullW,
+          windowHeight: fullH,
+          scrollX: 0,
+          scrollY: 0
+        }).then(canvas => {
           const link = document.createElement('a');
           link.download = '象限儀表板.png';
           link.href = canvas.toDataURL('image/png');
           link.click();
+
+          // 還原樣式
+          el.style.overflow = prevOverflow;
+          el.style.height = prevHeight;
+          el.style.width  = prevWidth;
+        }).catch(err => {
+          el.style.overflow = prevOverflow;
+          el.style.height = prevHeight;
+          el.style.width  = prevWidth;
+          console.error(err);
+          alert('截圖失敗，請稍後再試');
         });
       }
     </script>

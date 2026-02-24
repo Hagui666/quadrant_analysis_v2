@@ -227,6 +227,7 @@ st.dataframe(out_df, width="stretch")
 # =========================
 st.markdown("---")
 st.subheader("象限儀表板（本品 / 競品）")
+height_multiplier = st.slider("儀表板高度倍率（避免截斷）", min_value=1.0, max_value=3.0, value=1.6, step=0.1)
 
 if comp_col is None:
     st.warning("找不到『本/競品』欄位，無法產生象限儀表板。")
@@ -285,6 +286,26 @@ else:
             f'<div class="legend-item"><span class="dot" style="background:{html.escape(c)}"></span>{html.escape(str(b))}</div>'
         )
     legend_html = '<div class="legend">' + ''.join(legend_items) + '</div>' if legend_items else ''
+
+    # 估算 iframe 高度（保守估計，避免內容被截斷）
+    # 目前清單是兩欄顯示，所以以「行數 = ceil(筆數/2)」估算高度
+    def _rows(n: int) -> int:
+        return int((n + 1) // 2)  # ceil(n/2) for int
+
+    line_px = 26      # 每行高度（含行距/圓點）
+    quad_base = 190   # 每個象限的固定高度（標題/邊界/間距/圖例等）
+    # 四象限各自取本品/競品較大筆數（兩欄顯示）
+    quad_rows = {}
+    for q in ["第一象限", "第二象限", "第三象限", "第四象限"]:
+        ben_cnt = dash_df[(dash_df["象限"] == q) & (dash_df["_side_norm"] == "本品")].shape[0]
+        comp_cnt = dash_df[(dash_df["象限"] == q) & (dash_df["_side_norm"] == "競品")].shape[0]
+        quad_rows[q] = _rows(max(ben_cnt, comp_cnt))
+
+    top_rows = max(quad_rows.get("第二象限", 0), quad_rows.get("第一象限", 0))
+    bot_rows = max(quad_rows.get("第三象限", 0), quad_rows.get("第四象限", 0))
+
+    estimated_height = 260 + (quad_base + top_rows * line_px) + (quad_base + bot_rows * line_px)
+    estimated_height = max(1100, int(estimated_height))
 
     # 由 JS 自動回傳高度（避免白底區塊過長或被截斷），此處不再手動估算 iframe 高度。
 
@@ -503,4 +524,4 @@ else:
     html_block = css_white + "\n" + "\n".join(quad_parts) + "\n" + script
 
     # scrolling=False：避免 iframe 自己出現捲動條
-    components.html(html_block, height=900, scrolling=False)  # 初始高度，後續由 JS 自動回傳實際高度
+    components.html(html_block, height=int(estimated_height * height_multiplier), scrolling=False)

@@ -532,6 +532,15 @@ else:
 st.markdown("---")
 st.subheader("分區 × 城市 × 商圈 象限彙整表（本品 / 競品）")
 
+render_mode = st.radio(
+    "呈現方式",
+    ["互動表格（可下載CSV）", "儀表板樣式（HTML，可下載PNG）"],
+    index=0,
+    horizontal=True,
+    help="互動表格可直接在 Streamlit 顯示並下載 CSV；HTML 模式可模擬 Excel 合併儲存格並下載 PNG。"
+)
+
+
 need_area_cols = [ZONE_COL, CITY_COL, CIRCLE_COL]
 miss_area = [c for c in need_area_cols if c not in fdf.columns]
 if miss_area:
@@ -827,6 +836,38 @@ else:
                 script_table
             )
 
-            est_h = int(160 + len(table_df) * 34)
-            est_h = max(520, min(est_h, 2200))
-            components.html(html_table, height=est_h, scrolling=True)
+            # 互動表格（Streamlit DataFrame）或 HTML（合併儲存格+PNG）
+            if render_mode.startswith("互動表格"):
+                # 模擬 Excel 合併儲存格：同分區/同城市的重複值留空
+                disp = table_df.copy()
+
+                # 依連續重複區段把後續列清空（視覺上像合併）
+                for col in [ZONE_COL, CITY_COL]:
+                    last = None
+                    for r in range(len(disp)):
+                        v = disp.loc[r, col]
+                        if last is None:
+                            last = v
+                        else:
+                            if v == last:
+                                disp.loc[r, col] = ""
+                            else:
+                                last = v
+
+                st.dataframe(disp, use_container_width=True, hide_index=True)
+
+                # CSV 下載（扁平化雙層欄位）
+                dl = disp.copy()
+                if isinstance(dl.columns, pd.MultiIndex):
+                    dl.columns = [f"{a}-{b}" if b else str(a) for a, b in dl.columns]
+                csv_bytes = dl.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                st.download_button(
+                    "下載表格（CSV）",
+                    data=csv_bytes,
+                    file_name="area_city_circle_quadrant_table.csv",
+                    mime="text/csv"
+                )
+            else:
+                est_h = int(160 + len(table_df) * 34)
+                est_h = max(520, min(est_h, 2200))
+                components.html(html_table, height=est_h, scrolling=True)

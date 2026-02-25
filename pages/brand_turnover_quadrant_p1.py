@@ -212,6 +212,22 @@ st.sidebar.markdown("---")
 show_labels = st.sidebar.toggle("顯示資料標籤（門店）", value=False)
 cut_mode = st.sidebar.radio("分界點", ["平均值", "中位數"], index=0)
 
+# 圖表顯示設定
+st.sidebar.markdown("---")
+marker_size = st.sidebar.slider("點大小", min_value=4, max_value=30, value=12, step=1)
+label_font_size = st.sidebar.slider("資料標籤字體大小", min_value=8, max_value=28, value=14, step=1)
+
+# 標籤防重疊（Plotly 沒有完整自動避讓，這裡用「同一網格只顯示 1 個標籤」的方式降噪）
+declutter_labels = False
+x_bin_pct = 1.0
+y_bin_pct = 1.0
+if show_labels:
+    declutter_labels = st.sidebar.toggle("避免標籤重疊（建議開啟）", value=True)
+    with st.sidebar.expander("標籤防重疊強度", expanded=False):
+        st.markdown("<div class=\"note\">以 X/Y 軸範圍切網格，同一格只保留 1 個標籤。數字越大→保留的標籤越少。</div>", unsafe_allow_html=True)
+        x_bin_pct = st.slider("X 方向網格大小（占 X 範圍 %）", min_value=0.2, max_value=5.0, value=1.0, step=0.2)
+        y_bin_pct = st.slider("Y 方向網格大小（占 Y 範圍 %）", min_value=0.2, max_value=8.0, value=1.5, step=0.2)
+
 if len(fdf) == 0:
     st.warning("目前篩選結果為空，請調整左側篩選條件。")
     st.stop()
@@ -261,12 +277,34 @@ hover_dict = {
 if ADDRESS_COL in fdf.columns:
     hover_dict[ADDRESS_COL] = True
 
+# 準備標籤欄位（依需要做「防重疊」降噪）
+fdf = fdf.copy()
+fdf["_label"] = fdf[STORE_UI_COL].fillna("").astype(str)
+if show_labels and declutter_labels:
+    x_rng = float(fdf["_x"].max() - fdf["_x"].min())
+    y_rng = float(fdf["_y"].max() - fdf["_y"].min())
+    # 避免範圍=0 的狀況
+    x_bin = max(x_rng * (x_bin_pct / 100.0), 1e-9)
+    y_bin = max(y_rng * (y_bin_pct / 100.0), 1e-9)
+    tmp = fdf[[STORE_UI_COL, "_x", "_y"]].copy()
+    tmp["_xb"] = np.floor((tmp["_x"] - float(fdf["_x"].min())) / x_bin).astype(int)
+    tmp["_yb"] = np.floor((tmp["_y"] - float(fdf["_y"].min())) / y_bin).astype(int)
+    # 同一格只保留 1 個標籤：優先保留營業額較高者（更有代表性）
+    keep_idx = (
+        tmp.assign(_idx=tmp.index)
+           .sort_values(["_xb", "_yb", "_y"], ascending=[True, True, False])
+           .groupby(["_xb", "_yb"], as_index=False)
+           .head(1)["_idx"]
+           .tolist()
+    )
+    fdf["_label"] = np.where(fdf.index.isin(keep_idx), fdf["_label"], "")
+
 fig = px.scatter(
     fdf,
     x="_x",
     y="_y",
     color=BRAND_COL,
-    text=STORE_UI_COL,
+    text="_label",
     hover_data=hover_dict,
     labels={"_x": X_COL, "_y": Y_COL, STORE_UI_COL: "門店"},
     title=f"散點圖（{cut_mode}分界｜顏色=品牌）"
@@ -278,9 +316,18 @@ fig.add_vline(x=x_cut, line_dash="dash", annotation_text=f"X分界: {x_cut:.2%}"
 fig.add_hline(y=y_cut, line_dash="dash", annotation_text=f"Y分界: {y_cut:,.2f}", annotation_position="right")
 
 if show_labels:
-    fig.update_traces(mode="markers+text", textposition="top center")
+    fig.update_traces(
+        mode="markers+text",
+        textposition="top center",
+        textfont=dict(size=label_font_size),
+        marker=dict(size=marker_size)
+    )
 else:
-    fig.update_traces(mode="markers")
+    fig.update_traces(
+        mode="markers",
+        textfont=dict(size=label_font_size),
+        marker=dict(size=marker_size)
+    )
 
 # fig.update_yaxes(tickformat=".0%")
 fig.update_xaxes(tickformat=".0%")   # X 軸是成長率，用百分比顯示

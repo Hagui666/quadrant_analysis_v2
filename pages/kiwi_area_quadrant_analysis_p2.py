@@ -120,6 +120,12 @@ brand_pick = st.multiselect(
 )
 
 # =========================
+# Brand color map (全頁一致：同品牌在不同區塊顏色固定)
+# =========================
+PALETTE = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf']
+brand_color_map_global = {b: PALETTE[i % len(PALETTE)] for i, b in enumerate(brands_all)}
+
+# =========================
 # 1) 先用「全資料 df」算出每個品牌自己的分界值（固定，不受 brand_pick 影響）
 # =========================
 if cut_mode == "平均值":
@@ -273,10 +279,9 @@ else:
     dash_df = fdf.copy()
     dash_df["_side_norm"] = dash_df[comp_col].apply(normalize_side)
 
-    # 依品牌建立固定顏色對應（用於清單前綴圓點）
+    # 依品牌建立固定顏色對應（全頁一致）
     uniq_brands = sorted(dash_df[BRAND_COL].dropna().astype(str).unique().tolist())
-    palette = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf']
-    brand_color_map = {b: palette[i % len(palette)] for i, b in enumerate(uniq_brands)}
+    brand_color_map = brand_color_map_global
 
     # 圖例（品牌 ↔ 顏色）
     legend_items = []
@@ -558,26 +563,36 @@ else:
                 return ""
             return str(v).strip()
 
-        def _join_stores(df_part: pd.DataFrame) -> str:
+        def _join_stores(df_part: pd.DataFrame, brand_color_map: dict) -> str:
+            """Join stores into HTML lines, with a colored dot indicating the store's brand."""
             if df_part is None or len(df_part) == 0:
                 return ""
-            vals = (
-                df_part[STORE_UI_COL]
-                .dropna()
-                .astype(str)
-                .map(lambda s: s.strip())
-                .replace("", np.nan)
-                .dropna()
-                .tolist()
+
+            stores = (
+                df_part[[BRAND_COL, STORE_UI_COL]]
+                .dropna(subset=[STORE_UI_COL])
+                .assign(_store=lambda d: d[STORE_UI_COL].astype(str).map(lambda s: s.strip()))
+                .replace({"_store": {"": np.nan}})
+                .dropna(subset=["_store"])
             )
-            # 去重但保序
+
+            # 去重但保序：以 (品牌, 門店) 為鍵
             seen = set()
-            uniq = []
-            for x in vals:
-                if x not in seen:
-                    seen.add(x)
-                    uniq.append(x)
-            return "<br/>".join([html.escape(x) for x in uniq])
+            parts = []
+            for b, s in zip(stores[BRAND_COL].astype(str).fillna(""), stores["_store"].tolist()):
+                key = (b, s)
+                if key in seen:
+                    continue
+                seen.add(key)
+                color = brand_color_map.get(b, "#111111")
+                parts.append(
+                    f'<div class="store" title="{html.escape(str(b))}">'
+                    f'<span class="dot" style="background:{html.escape(color)}"></span>'
+                    f'<span class="name">{html.escape(s)}</span>'
+                    f'</div>'
+                )
+
+            return "".join(parts)
 
         # 以「分區→城市→商圈」排序
         area_df[ZONE_COL] = area_df[ZONE_COL].apply(_safe_str)
@@ -599,7 +614,7 @@ else:
             for q in ["第一象限", "第二象限", "第三象限", "第四象限"]:
                 for side in ["本品", "競品"]:
                     gg = g[(g["象限"] == q) & (g["_side_norm"] == side)]
-                    cell[(q, side)] = _join_stores(gg)
+                    cell[(q, side)] = _join_stores(gg, brand_color_map_global)
 
             rows.append({
                 ZONE_COL: z,
@@ -666,7 +681,7 @@ else:
 
             css_table = """
             <style>
-              .area-wrap{ background:#fff; color:#111; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",Arial,sans-serif; }
+              .area-wrap{ background:#fff; color:#111; overflow-x:hidden; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",Arial,sans-serif; }
               .area-toolbar{ display:flex; align-items:center; gap:10px; margin: 4px 0 10px 0; }
               .area-btn{ background:#111; color:#fff; border:none; border-radius:8px; padding:8px 10px; font-weight:700; cursor:pointer; }
               .area-btn:hover{ opacity:0.9; }
@@ -676,7 +691,7 @@ else:
                 border-collapse: collapse;
                 width: 100%;
                 table-layout: fixed;
-                font-size: 12px;
+                font-size: 11px;
               }
               table.area th, table.area td{
                 border: 1px solid rgba(0,0,0,0.28);
@@ -714,14 +729,34 @@ else:
                 line-height: 1.55;
                 white-space: normal;
               }
+
+              .store{
+                display:flex;
+                align-items:flex-start;
+                gap:6px;
+                margin: 0 0 4px 0;
+                break-inside: avoid;
+              }
+              .store .dot{
+                width: 9px;
+                height: 9px;
+                border-radius: 50%;
+                display:inline-block;
+                flex: 0 0 9px;
+                margin-top: 4px;
+                box-shadow: 0 0 0 1px rgba(0,0,0,0.15);
+              }
+              .store .name{
+                display:inline-block;
+              }
               .muted{ color:#666; font-style: italic; }
 
-              /* column widths */
-              col.z{ width: 72px; }
-              col.city{ width: 86px; }
-              col.circle{ width: 160px; }
-              col.small{ width: 62px; }
-              col.big{ width: 180px; }
+              /* column widths (縮窄以避免水平捲動) */
+              col.z{ width: 56px; }
+              col.city{ width: 72px; }
+              col.circle{ width: 140px; }
+              col.small{ width: 50px; }
+              col.big{ width: 120px; }
             </style>
             """
 
@@ -768,7 +803,7 @@ else:
                     for side in ["本品","競品"]:
                         v = r[(q, side)]
                         if not isinstance(v, str) or v.strip() == "":
-                            tds.append('<td class="cell muted">（無）</td>')
+                            tds.append('<td class="cell"></td>')
                         else:
                             tds.append(f'<td class="cell">{v}</td>')
 
@@ -870,4 +905,4 @@ else:
             else:
                 est_h = int(160 + len(table_df) * 34)
                 est_h = max(520, min(est_h, 2200))
-                components.html(html_table, height=est_h, scrolling=True)
+                components.html(html_table, height=est_h, scrolling=False)

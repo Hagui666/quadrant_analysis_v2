@@ -525,3 +525,308 @@ else:
 
     # scrolling=False：避免 iframe 自己出現捲動條
     components.html(html_block, height=int(estimated_height * height_multiplier), scrolling=False)
+
+# =========================
+# Area/City/Circle table under dashboard (HTML table)
+# =========================
+st.markdown("---")
+st.subheader("分區 × 城市 × 商圈 象限彙整表（本品 / 競品）")
+
+need_area_cols = [ZONE_COL, CITY_COL, CIRCLE_COL]
+miss_area = [c for c in need_area_cols if c not in fdf.columns]
+if miss_area:
+    st.warning(f"缺少欄位 {miss_area}，無法產生分區/城市/商圈彙整表。")
+else:
+    # 使用顯示後資料 fdf（已套 brand_pick），並沿用象限與本/競品正規化
+    area_df = fdf.copy()
+    if comp_col is None:
+        st.warning("找不到『本/競品』欄位，無法產生分區/城市/商圈彙整表。")
+    else:
+        area_df["_side_norm"] = area_df[comp_col].apply(normalize_side)
+
+        def _safe_str(v):
+            if pd.isna(v):
+                return ""
+            return str(v).strip()
+
+        def _join_stores(df_part: pd.DataFrame) -> str:
+            if df_part is None or len(df_part) == 0:
+                return ""
+            vals = (
+                df_part[STORE_UI_COL]
+                .dropna()
+                .astype(str)
+                .map(lambda s: s.strip())
+                .replace("", np.nan)
+                .dropna()
+                .tolist()
+            )
+            # 去重但保序
+            seen = set()
+            uniq = []
+            for x in vals:
+                if x not in seen:
+                    seen.add(x)
+                    uniq.append(x)
+            return "<br/>".join([html.escape(x) for x in uniq])
+
+        # 以「分區→城市→商圈」排序
+        area_df[ZONE_COL] = area_df[ZONE_COL].apply(_safe_str)
+        area_df[CITY_COL] = area_df[CITY_COL].apply(_safe_str)
+        area_df[CIRCLE_COL] = area_df[CIRCLE_COL].apply(_safe_str)
+
+        area_df = area_df.sort_values([ZONE_COL, CITY_COL, CIRCLE_COL, BRAND_COL, STORE_UI_COL]).copy()
+
+        # 先建立每個（分區,城市,商圈）對應的內容
+        group_keys = [ZONE_COL, CITY_COL, CIRCLE_COL]
+        rows = []
+        for (z, c, cir), g in area_df.groupby(group_keys, dropna=False):
+            # 店數
+            cnt_ben = int((g["_side_norm"] == "本品").sum())
+            cnt_comp = int((g["_side_norm"] == "競品").sum())
+
+            # 四象限文字清單（以門店欄位顯示）
+            cell = {}
+            for q in ["第一象限", "第二象限", "第三象限", "第四象限"]:
+                for side in ["本品", "競品"]:
+                    gg = g[(g["象限"] == q) & (g["_side_norm"] == side)]
+                    cell[(q, side)] = _join_stores(gg)
+
+            rows.append({
+                ZONE_COL: z,
+                CITY_COL: c,
+                CIRCLE_COL: cir,
+                ("店數", "本品"): cnt_ben,
+                ("店數", "競品"): cnt_comp,
+                ("第一象限", "本品"): cell[("第一象限", "本品")],
+                ("第一象限", "競品"): cell[("第一象限", "競品")],
+                ("第二象限", "本品"): cell[("第二象限", "本品")],
+                ("第二象限", "競品"): cell[("第二象限", "競品")],
+                ("第三象限", "本品"): cell[("第三象限", "本品")],
+                ("第三象限", "競品"): cell[("第三象限", "競品")],
+                ("第四象限", "本品"): cell[("第四象限", "本品")],
+                ("第四象限", "競品"): cell[("第四象限", "競品")],
+            })
+
+        if len(rows) == 0:
+            st.info("目前資料無法產生分區/城市/商圈彙整表（可能篩選後為空）。")
+        else:
+            table_df = pd.DataFrame(rows)
+
+            # 計算 rowspan（模擬 Excel 合併儲存格）
+            # 以排序後 table_df 的連續區段計算
+            table_df = table_df.sort_values([ZONE_COL, CITY_COL, CIRCLE_COL]).reset_index(drop=True)
+
+            zone_spans = [0] * len(table_df)
+            city_spans = [0] * len(table_df)
+
+            # zone spans
+            i = 0
+            while i < len(table_df):
+                z = table_df.loc[i, ZONE_COL]
+                j = i
+                while j < len(table_df) and table_df.loc[j, ZONE_COL] == z:
+                    j += 1
+                span = j - i
+                zone_spans[i] = span
+                for k in range(i + 1, j):
+                    zone_spans[k] = 0
+                i = j
+
+            # city spans within zone
+            i = 0
+            while i < len(table_df):
+                z = table_df.loc[i, ZONE_COL]
+                c = table_df.loc[i, CITY_COL]
+                j = i
+                while j < len(table_df) and table_df.loc[j, ZONE_COL] == z and table_df.loc[j, CITY_COL] == c:
+                    j += 1
+                span = j - i
+                city_spans[i] = span
+                for k in range(i + 1, j):
+                    city_spans[k] = 0
+                i = j
+
+            header_groups = [
+                ("店數", ""),
+                ("第一象限", "（高營收/高成長）"),
+                ("第二象限", "（高營收/低成長）"),
+                ("第三象限", "（低營收/低成長）"),
+                ("第四象限", "（低營收/高成長）"),
+            ]
+
+            css_table = """
+            <style>
+              .area-wrap{ background:#fff; color:#111; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",Arial,sans-serif; }
+              .area-toolbar{ display:flex; align-items:center; gap:10px; margin: 4px 0 10px 0; }
+              .area-btn{ background:#111; color:#fff; border:none; border-radius:8px; padding:8px 10px; font-weight:700; cursor:pointer; }
+              .area-btn:hover{ opacity:0.9; }
+              .area-hint{ font-size:12px; color:#444; }
+
+              table.area{
+                border-collapse: collapse;
+                width: 100%;
+                table-layout: fixed;
+                font-size: 12px;
+              }
+              table.area th, table.area td{
+                border: 1px solid rgba(0,0,0,0.28);
+                padding: 6px 6px;
+                vertical-align: top;
+                word-break: break-word;
+                background: #fff;
+              }
+              table.area th{
+                text-align: center;
+                font-weight: 800;
+              }
+              .sticky-head thead th{
+                position: sticky;
+                top: 0;
+                z-index: 2;
+              }
+              td.merge{
+                text-align: center;
+                vertical-align: middle;
+                font-weight: 800;
+                background: #fafafa;
+              }
+              td.circle{
+                font-weight: 700;
+                background: #ffffff;
+              }
+              td.num{
+                text-align:center;
+                vertical-align: middle;
+                font-weight: 800;
+                background:#ffffff;
+              }
+              td.cell{
+                line-height: 1.55;
+                white-space: normal;
+              }
+              .muted{ color:#666; font-style: italic; }
+
+              /* column widths */
+              col.z{ width: 72px; }
+              col.city{ width: 86px; }
+              col.circle{ width: 160px; }
+              col.small{ width: 62px; }
+              col.big{ width: 180px; }
+            </style>
+            """
+
+            # Header rows
+            h1 = []
+            h2 = []
+
+            h1.append('<th rowspan="2">分區編碼</th>')
+            h1.append('<th rowspan="2">城市</th>')
+            h1.append('<th rowspan="2">商圈名稱(kiwi)</th>')
+
+            for gname, gdesc in header_groups:
+                title = html.escape(gname + (gdesc or ""))
+                h1.append(f'<th colspan="2">{title}</th>')
+                h2.append('<th>本品</th><th>競品</th>')
+
+            thead = "<thead><tr>" + "".join(h1) + "</tr><tr>" + "".join(h2) + "</tr></thead>"
+
+            colgroup = """
+            <colgroup>
+              <col class="z"/><col class="city"/><col class="circle"/>
+              <col class="small"/><col class="small"/>
+              <col class="big"/><col class="big"/>
+              <col class="big"/><col class="big"/>
+              <col class="big"/><col class="big"/>
+              <col class="big"/><col class="big"/>
+            </colgroup>
+            """
+
+            body_rows = []
+            for idx, r in table_df.iterrows():
+                tds = []
+                if zone_spans[idx] > 0:
+                    tds.append(f'<td class="merge" rowspan="{zone_spans[idx]}">{html.escape(str(r[ZONE_COL]))}</td>')
+                if city_spans[idx] > 0:
+                    tds.append(f'<td class="merge" rowspan="{city_spans[idx]}">{html.escape(str(r[CITY_COL]))}</td>')
+
+                tds.append(f'<td class="circle">{html.escape(str(r[CIRCLE_COL]))}</td>')
+
+                tds.append(f'<td class="num">{int(r[("店數","本品")])}</td>')
+                tds.append(f'<td class="num">{int(r[("店數","競品")])}</td>')
+
+                for q in ["第一象限","第二象限","第三象限","第四象限"]:
+                    for side in ["本品","競品"]:
+                        v = r[(q, side)]
+                        if not isinstance(v, str) or v.strip() == "":
+                            tds.append('<td class="cell muted">（無）</td>')
+                        else:
+                            tds.append(f'<td class="cell">{v}</td>')
+
+                body_rows.append("<tr>" + "".join(tds) + "</tr>")
+
+            tbody = "<tbody>" + "".join(body_rows) + "</tbody>"
+
+            script_table = """
+            <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+            <script>
+              function reportHeight(){
+                try{
+                  const h = Math.max(
+                    document.documentElement.scrollHeight,
+                    document.body.scrollHeight,
+                    document.documentElement.offsetHeight,
+                    document.body.offsetHeight
+                  );
+                  window.parent.postMessage(
+                    {isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: h},
+                    "*"
+                  );
+                }catch(e){}
+              }
+              window.addEventListener("load", () => { reportHeight(); setTimeout(reportHeight, 200); setTimeout(reportHeight, 800); });
+              const ro = new ResizeObserver(() => { reportHeight(); });
+              ro.observe(document.body);
+
+              function downloadAreaTable(){
+                const el = document.getElementById('areaTableWrap');
+                if(!el){ alert('找不到表格'); return; }
+                const fullH = Math.max(el.scrollHeight, el.offsetHeight);
+                const fullW = Math.max(el.scrollWidth,  el.offsetWidth);
+                html2canvas(el, {
+                  backgroundColor: '#ffffff',
+                  scale: 2,
+                  width: fullW,
+                  height: fullH,
+                  windowWidth: fullW,
+                  windowHeight: fullH,
+                  scrollX: 0,
+                  scrollY: 0
+                }).then(canvas => {
+                  const link = document.createElement('a');
+                  link.download = '分區城市商圈象限表.png';
+                  link.href = canvas.toDataURL('image/png');
+                  link.click();
+                }).catch(err => {
+                  console.error(err);
+                  alert('截圖失敗，請稍後再試');
+                });
+              }
+            </script>
+            """
+
+            html_table = (
+                css_table +
+                '<div class="area-wrap" id="areaTableWrap">' +
+                '<div class="area-toolbar">' +
+                '<button class="area-btn" onclick="downloadAreaTable()">下載表格（PNG）</button>' +
+                '<span class="area-hint">（會將下方整張表輸出成圖片）</span>' +
+                '</div>' +
+                f'<table class="area sticky-head">{colgroup}{thead}{tbody}</table>' +
+                '</div>' +
+                script_table
+            )
+
+            est_h = int(160 + len(table_df) * 34)
+            est_h = max(520, min(est_h, 2200))
+            components.html(html_table, height=est_h, scrolling=True)

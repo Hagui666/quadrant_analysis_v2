@@ -314,16 +314,16 @@ else:
     estimated_height = 260 + (quad_base + top_rows * line_px) + (quad_base + bot_rows * line_px)
     estimated_height = max(1100, int(estimated_height))
 
-# ✅ 初始高度：把估算高度夾在 700~1200，避免一載入就過長
-base_h = max(700, min(int(estimated_height), 1200))
-iframe_h = st.slider(
-    "儀表板顯示高度（px，可自行拉長/縮短）",
-    min_value=500,
-    max_value=2600,
-    value=base_h if 'base_h' in locals() else 900,
-    step=50
-)
-# 由 JS 自動回傳高度（避免白底區塊過長或被截斷），此處不再手動估算 iframe 高度。
+    # ✅ 初始高度：把估算高度夾在 700~1200，避免一載入就過長
+    base_h = max(700, min(int(estimated_height), 1200))
+    iframe_h = st.slider(
+        "儀表板顯示高度（px，可自行拉長/縮短）",
+        min_value=500,
+        max_value=2600,
+        value=base_h if 'base_h' in locals() else 900,
+        step=50
+    )
+    # 由 JS 自動回傳高度（避免白底區塊過長或被截斷），此處不再手動估算 iframe 高度。
 
     css_white = """
     <style>
@@ -538,7 +538,7 @@ iframe_h = st.slider(
     html_block = css_white + "\n" + "\n".join(quad_parts) + "\n" + script
 
     # scrolling=False：避免 iframe 自己出現捲動條
-    components.html(html_block, height=int(iframe_h if "iframe_h" in locals() else iframe_h_fallback), scrolling=False)
+    components.html(html_block, height=int(iframe_h), scrolling=False)
 
 # =========================
 # Area/City/Circle table under dashboard (HTML table)
@@ -699,11 +699,6 @@ else:
                 overflow-x: hidden;
                 border: 1px solid rgba(0,0,0,0.15);
                 border-radius: 10px;
-              }
-              .area-scroll{
-                /* ✅ 只讓表格區滾動（不含工具列） */
-                max-height: 70vh;   /* 可依需求調整：如 600px / 90vh */
-                overflow-y: auto;
               }
               .area-scroll{
                 /* ✅ 只讓表格區滾動（不含工具列） */

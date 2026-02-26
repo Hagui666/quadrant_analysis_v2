@@ -114,11 +114,40 @@ st.title("P2｜品牌象限分組（每個品牌各自計算分界）")
 cut_mode = st.radio("分界點計算方式", ["平均值", "中位數"], index=0, horizontal=True)
 
 brands_all = sorted(df[BRAND_COL].dropna().astype(str).unique().tolist())
-brand_pick = st.multiselect(
-    "品牌（多選，僅影響顯示，不影響各品牌分組運算）",
-    options=brands_all,
-    default=brands_all
-)
+
+# =========================
+# Sidebar filters（左側工具列）
+# =========================
+st.sidebar.header("篩選器")
+
+# 1) 品牌（依本品/競品拆分）
+# 若找不到本/競品欄位，則退回單一品牌篩選
+if comp_col is not None:
+    df_all_side_tmp = df.copy()
+    df_all_side_tmp["_side_norm"] = df_all_side_tmp[comp_col].apply(normalize_side)
+
+    ben_brands_all = sorted(df_all_side_tmp[df_all_side_tmp["_side_norm"] == "本品"][BRAND_COL].dropna().astype(str).unique().tolist())
+    comp_brands_all = sorted(df_all_side_tmp[df_all_side_tmp["_side_norm"] == "競品"][BRAND_COL].dropna().astype(str).unique().tolist())
+
+    ben_brand_pick = st.sidebar.multiselect(
+        "本品品牌（多選）",
+        options=ben_brands_all,
+        default=ben_brands_all
+    )
+    comp_brand_pick = st.sidebar.multiselect(
+        "競品品牌（多選）",
+        options=comp_brands_all,
+        default=comp_brands_all
+    )
+
+    brand_pick_union = sorted(set(ben_brand_pick) | set(comp_brand_pick))
+else:
+    brand_pick_union = st.sidebar.multiselect(
+        "品牌（多選）",
+        options=brands_all,
+        default=brands_all
+    )
+    ben_brand_pick, comp_brand_pick = None, None
 
 # =========================
 # Brand color map (全頁一致：同品牌在不同區塊顏色固定)
@@ -160,9 +189,100 @@ q_order_map = {"第一象限": 1, "第二象限": 2, "第三象限": 3, "第四�
 df_all["_q_order"] = df_all["象限"].map(q_order_map).fillna(99).astype(int)
 
 # =========================
+# Apply sidebar filters（顯示過濾；不影響各品牌分界運算）
+# =========================
+df_view = df_all.copy()
+
+# 先加入本品/競品正規化欄位（若存在）
+if comp_col is not None and comp_col in df_view.columns:
+    df_view["_side_norm"] = df_view[comp_col].apply(normalize_side)
+
+# ---- 分區 -> 城市 -> 商圈：層級選項更新 ----
+if ZONE_COL in df_view.columns:
+    zones_all = sorted(df_view[ZONE_COL].dropna().astype(str).unique().tolist())
+else:
+    zones_all = []
+
+# Zone multiselect (top level)
+if "zone_pick" not in st.session_state:
+    st.session_state["zone_pick"] = []
+
+if not st.session_state["zone_pick"]:
+    st.session_state["zone_pick"] = zones_all
+else:
+    st.session_state["zone_pick"] = [z for z in st.session_state["zone_pick"] if z in zones_all]
+    if not st.session_state["zone_pick"]:
+        st.session_state["zone_pick"] = zones_all
+
+st.sidebar.multiselect("分區編碼", options=zones_all, default=st.session_state["zone_pick"], key="zone_pick")
+zone_pick = st.session_state["zone_pick"]
+
+df_lv1 = df_view[df_view[ZONE_COL].astype(str).isin([str(x) for x in zone_pick])] if zones_all else df_view
+
+if CITY_COL in df_lv1.columns:
+    cities_all = sorted(df_lv1[CITY_COL].dropna().astype(str).unique().tolist())
+else:
+    cities_all = []
+
+# 重新渲染 sidebar 的下層選項（Streamlit 不能「就地改 options」；因此用 session_state 記住）
+# 這裡採用「如果使用者尚未選或選的已不在可選清單內，則自動改為全選」
+if "city_pick" not in st.session_state:
+    st.session_state["city_pick"] = []
+if not st.session_state["city_pick"]:
+    st.session_state["city_pick"] = cities_all
+else:
+    st.session_state["city_pick"] = [c for c in st.session_state["city_pick"] if c in cities_all]
+    if not st.session_state["city_pick"]:
+        st.session_state["city_pick"] = cities_all
+
+st.sidebar.multiselect("城市", options=cities_all, default=st.session_state["city_pick"], key="city_pick")
+
+city_pick = st.session_state["city_pick"]
+df_lv2 = df_lv1[df_lv1[CITY_COL].astype(str).isin([str(x) for x in city_pick])] if cities_all else df_lv1
+
+if CIRCLE_COL in df_lv2.columns:
+    circles_all = sorted(df_lv2[CIRCLE_COL].dropna().astype(str).unique().tolist())
+else:
+    circles_all = []
+
+if "circle_pick" not in st.session_state:
+    st.session_state["circle_pick"] = []
+if not st.session_state["circle_pick"]:
+    st.session_state["circle_pick"] = circles_all
+else:
+    st.session_state["circle_pick"] = [c for c in st.session_state["circle_pick"] if c in circles_all]
+    if not st.session_state["circle_pick"]:
+        st.session_state["circle_pick"] = circles_all
+
+st.sidebar.multiselect("商圈名稱(kiwi)", options=circles_all, default=st.session_state["circle_pick"], key="circle_pick")
+
+circle_pick = st.session_state["circle_pick"]
+
+# ---- 套用區域層級過濾 ----
+if zones_all:
+    df_view = df_view[df_view[ZONE_COL].astype(str).isin([str(x) for x in zone_pick])]
+if cities_all:
+    df_view = df_view[df_view[CITY_COL].astype(str).isin([str(x) for x in city_pick])]
+if circles_all:
+    df_view = df_view[df_view[CIRCLE_COL].astype(str).isin([str(x) for x in circle_pick])]
+
+# ---- 套用品牌過濾（本品/競品拆分）----
+if comp_col is not None and "_side_norm" in df_view.columns:
+    # 若使用者把某側品牌清空，該側資料就不顯示
+    ben_ok = df_view["_side_norm"].ne("本品") | df_view[BRAND_COL].astype(str).isin([str(x) for x in (ben_brand_pick or [])])
+    comp_ok = df_view["_side_norm"].ne("競品") | df_view[BRAND_COL].astype(str).isin([str(x) for x in (comp_brand_pick or [])])
+    df_view = df_view[ben_ok & comp_ok].copy()
+else:
+    df_view = df_view[df_view[BRAND_COL].astype(str).isin([str(x) for x in (brand_pick_union or [])])].copy()
+
+if len(df_view) == 0:
+    st.warning("目前篩選結果為空，請調整左側篩選器。")
+    st.stop()
+
+# =========================
 # 各品牌分界值表（只顯示勾選品牌；並新增四象限筆數欄）
 # =========================
-brand_cuts_show = brand_cuts[brand_cuts[BRAND_COL].astype(str).isin(brand_pick)].copy() if brand_pick else brand_cuts.iloc[0:0].copy()
+brand_cuts_show = brand_cuts[brand_cuts[BRAND_COL].astype(str).isin(brand_pick_union)].copy() if brand_pick_union else brand_cuts.iloc[0:0].copy()
 brand_cuts_show = brand_cuts_show.sort_values(BRAND_COL)
 
 # 每品牌四象限筆數（以品牌內象限分類後 df_all 統計）
@@ -191,7 +311,7 @@ show_cuts = show_cuts[[BRAND_COL, "筆數", "X分界(成長率)", "Y分界(回�
 st.dataframe(show_cuts, width="stretch")
 
 # ✅ 最後才套 brand_pick 做「顯示過濾」
-fdf = df_all[df_all[BRAND_COL].astype(str).isin(brand_pick)].copy() if brand_pick else df_all.iloc[0:0].copy()
+fdf = df_view.copy()
 if len(fdf) == 0:
     st.warning("目前品牌篩選結果為空，請調整選擇。")
     st.stop()

@@ -674,6 +674,13 @@ render_mode = st.radio(
     help="互動表格可直接在 Streamlit 顯示並下載 CSV；HTML 模式可模擬 Excel 合併儲存格並下載 PNG。"
 )
 
+# ✅ 此區塊專用過濾器：只影響下方「分區×城市×商圈 象限彙整表」顯示
+only_ben_cnt_gt0 = st.checkbox(
+    "僅顯示『店數-本品』 > 0 的列",
+    value=False,
+    help="勾選後，只會保留本品店數大於 0 的分區/城市/商圈列（不影響左側全域篩選器與其他區塊）。"
+)
+
 
 need_area_cols = [ZONE_COL, CITY_COL, CIRCLE_COL]
 miss_area = [c for c in need_area_cols if c not in fdf.columns]
@@ -765,6 +772,14 @@ else:
             st.info("目前資料無法產生分區/城市/商圈彙整表（可能篩選後為空）。")
         else:
             table_df = pd.DataFrame(rows)
+
+            # ✅ 區塊專用過濾：僅顯示本品店數 > 0
+            if only_ben_cnt_gt0 and ("店數", "本品") in table_df.columns:
+                table_df = table_df[table_df[("店數", "本品")] > 0].reset_index(drop=True)
+
+            if len(table_df) == 0:
+                st.info("依目前條件（含『本品店數 > 0』過濾）無資料可顯示。")
+                st.stop()
 
             # 計算 rowspan（模擬 Excel 合併儲存格）
             # 以排序後 table_df 的連續區段計算

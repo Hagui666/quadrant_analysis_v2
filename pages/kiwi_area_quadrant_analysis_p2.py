@@ -234,8 +234,9 @@ st.dataframe(out_df, width="stretch")
 # =========================
 st.markdown("---")
 st.subheader("象限儀表板（本品 / 競品）")
-height_multiplier = st.slider("儀表板高度倍率（避免截斷）", min_value=0.2, max_value=3.0, value=1.6, step=0.05)
-
+# ✅ 顯示高度改用「px slider」：初始不會過長，且可自行拉長/縮短
+# estimated_height 會在下方算出；這裡先給一個保守預設（之後會再以 estimated_height 夾值一次）
+iframe_h_fallback = 900
 if comp_col is None:
     st.warning("找不到『本/競品』欄位，無法產生象限儀表板。")
 else:
@@ -313,7 +314,16 @@ else:
     estimated_height = 260 + (quad_base + top_rows * line_px) + (quad_base + bot_rows * line_px)
     estimated_height = max(1100, int(estimated_height))
 
-    # 由 JS 自動回傳高度（避免白底區塊過長或被截斷），此處不再手動估算 iframe 高度。
+# ✅ 初始高度：把估算高度夾在 700~1200，避免一載入就過長
+base_h = max(700, min(int(estimated_height), 1200))
+iframe_h = st.slider(
+    "儀表板顯示高度（px，可自行拉長/縮短）",
+    min_value=500,
+    max_value=2600,
+    value=base_h if 'base_h' in locals() else 900,
+    step=50
+)
+# 由 JS 自動回傳高度（避免白底區塊過長或被截斷），此處不再手動估算 iframe 高度。
 
     css_white = """
     <style>
@@ -471,14 +481,12 @@ else:
         }catch(e){}
       }
 
-      // 初次與資源載入後回報
-      window.addEventListener("load", () => { reportHeight(); setTimeout(reportHeight, 200); setTimeout(reportHeight, 800); });
-
-      // 內容變動即回報（字體/清單變動/展開收合）
-      const ro = new ResizeObserver(() => { reportHeight(); });
-      ro.observe(document.body);
-
-      // === PNG download ===
+      // ✅ 不自動 setFrameHeight：由 Streamlit 端的 slider 控制 iframe 顯示高度
+// （避免一載入就被內容撐到很長；下載 PNG 仍會用 scrollHeight 截全）
+// window.addEventListener("load", () => { reportHeight(); });
+// const ro = new ResizeObserver(() => { reportHeight(); });
+// ro.observe(document.body);
+// === PNG download ===
       function downloadDashboard(){
         const el = document.getElementById('dashboard');
         if(!el){ alert('找不到儀表板'); return; }
@@ -530,7 +538,7 @@ else:
     html_block = css_white + "\n" + "\n".join(quad_parts) + "\n" + script
 
     # scrolling=False：避免 iframe 自己出現捲動條
-    components.html(html_block, height=int(estimated_height * height_multiplier), scrolling=False)
+    components.html(html_block, height=int(iframe_h if "iframe_h" in locals() else iframe_h_fallback), scrolling=False)
 
 # =========================
 # Area/City/Circle table under dashboard (HTML table)
@@ -691,6 +699,11 @@ else:
                 overflow-x: hidden;
                 border: 1px solid rgba(0,0,0,0.15);
                 border-radius: 10px;
+              }
+              .area-scroll{
+                /* ✅ 只讓表格區滾動（不含工具列） */
+                max-height: 70vh;   /* 可依需求調整：如 600px / 90vh */
+                overflow-y: auto;
               }
               .area-scroll{
                 /* ✅ 只讓表格區滾動（不含工具列） */

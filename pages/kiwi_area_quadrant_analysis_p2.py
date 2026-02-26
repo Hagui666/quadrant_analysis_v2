@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+import json
 import math
 
 st.set_page_config(page_title="P2｜品牌象限分組", layout="wide")
@@ -681,7 +682,21 @@ else:
 
             css_table = """
             <style>
-              .area-wrap{ background:#fff; color:#111; overflow-x:hidden; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",Arial,sans-serif; }
+              .area-wrap{
+                background:#fff;
+                color:#111;
+                font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",Arial,sans-serif;
+
+                /* ✅ 垂直捲動：表格較長時不會被截斷 */
+                overflow-x: hidden;
+                border: 1px solid rgba(0,0,0,0.15);
+                border-radius: 10px;
+              }
+              .area-scroll{
+                /* ✅ 只讓表格區滾動（不含工具列） */
+                max-height: 70vh;   /* 可依需求調整：如 600px / 90vh */
+                overflow-y: auto;
+              }
               .area-toolbar{ display:flex; align-items:center; gap:10px; margin: 4px 0 10px 0; }
               .area-btn{ background:#111; color:#fff; border:none; border-radius:8px; padding:8px 10px; font-weight:700; cursor:pointer; }
               .area-btn:hover{ opacity:0.9; }
@@ -866,7 +881,9 @@ else:
                 '<button class="area-btn" onclick="downloadAreaTable()">下載表格（PNG）</button>' +
                 '<span class="area-hint">（會將下方整張表輸出成圖片）</span>' +
                 '</div>' +
+                '<div class="area-scroll">' +
                 f'<table class="area sticky-head">{colgroup}{thead}{tbody}</table>' +
+                '</div>' +
                 '</div>' +
                 script_table
             )

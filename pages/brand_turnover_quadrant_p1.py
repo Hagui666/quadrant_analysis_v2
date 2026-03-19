@@ -87,6 +87,24 @@ def parse_optional_float(text: str):
     except Exception:
         return None
 
+def parse_optional_rate(text: str):
+    """
+    成長率欄位專用：
+    - 允許輸入 2.871（代表 287.1%）
+    - 也允許輸入 287.1%（自動轉成 2.871）
+    """
+    if text is None:
+        return None
+    t = str(text).strip().replace(",", "")
+    if t == "":
+        return None
+    try:
+        if t.endswith("%"):
+            return float(t[:-1]) / 100.0
+        return float(t)
+    except Exception:
+        return None
+
 def apply_optional_range(df_in: pd.DataFrame, col_internal: str, min_v, max_v) -> pd.DataFrame:
     out = df_in
     if min_v is not None:
@@ -151,9 +169,11 @@ df = df.dropna(subset=["_x_raw", "_y_raw"]).copy()
 
 # 成長率逐筆偵測（避免整欄誤除 100）
 # df["_y"] = df["_y_raw"].where(df["_y_raw"].abs() <= 1.5, df["_y_raw"] / 100.0)
-df["_x"] = df["_x_raw"].where(df["_x_raw"].abs() <= 1.5, df["_x_raw"] / 100.0) # 成長率逐筆偵測（套用在 X 軸）
-# df["_x"] = df["_x_raw"]
-df["_y"] = df["_y_raw"] # 營業額不需要百分比轉換
+# Excel 中的百分比若為數值型，通常已是「小數表示法」：
+# 例如 0.3429 = 34.29%，2.8709 = 287.09%。
+# 因此這裡不可再依數值大小額外 /100，否則 >150% 的門店會被錯縮 100 倍。
+df["_x"] = df["_x_raw"]
+df["_y"] = df["_y_raw"]  # 營業額不需要百分比轉換
 
 df["_city_order"] = df[CITY_CODE_COL].apply(leading_int)
 
@@ -197,10 +217,10 @@ fdf = fdf[fdf[CIRCLE_COL].astype(str).isin(circle_pick)].copy() if circle_pick e
 # (5) 數值篩選（可空）
 st.sidebar.markdown("---")
 st.sidebar.markdown("**數值篩選（可選）**")
-st.sidebar.markdown('<div class="note">※ 最小/最大留空代表不啟用此數值篩選</div>', unsafe_allow_html=True)
+st.sidebar.markdown('<div class="note">※ 最小/最大留空代表不啟用此數值篩選；成長率可輸入 2.87 或 287%</div>', unsafe_allow_html=True)
 
-x_min = parse_optional_float(st.sidebar.text_input(f"{X_COL} 最小值", value="", key="xmin"))
-x_max = parse_optional_float(st.sidebar.text_input(f"{X_COL} 最大值", value="", key="xmax"))
+x_min = parse_optional_rate(st.sidebar.text_input(f"{X_COL} 最小值", value="", key="xmin"))
+x_max = parse_optional_rate(st.sidebar.text_input(f"{X_COL} 最大值", value="", key="xmax"))
 y_min = parse_optional_float(st.sidebar.text_input(f"{Y_COL} 最小值", value="", key="ymin"))
 y_max = parse_optional_float(st.sidebar.text_input(f"{Y_COL} 最大值", value="", key="ymax"))
 
@@ -255,7 +275,7 @@ fdf["象限"] = np.select(conds, q_labels, default="未分類")
 # =========================
 # Main UI
 # =========================
-st.title("2025 回推平均營業額 × 2025 成長率（互動）")
+st.title("2025 成長率 × 2025 回推平均營業額（互動）")
 
 c1, c2, c3 = st.columns(3)
 # c1.metric("X 分界值", f"{x_cut:,.2f}")
@@ -270,8 +290,8 @@ hover_dict = {
     ZONE_COL: True,
     CITY_COL: True,
     CIRCLE_COL: True,
-    X_COL: True,
-    Y_COL: True,
+    X_COL: ":.2%",
+    Y_COL: ":,.2f",
     "象限": True,
 }
 if ADDRESS_COL in fdf.columns:

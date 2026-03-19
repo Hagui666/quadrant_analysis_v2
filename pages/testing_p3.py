@@ -291,6 +291,9 @@ tmp_city = (
 city_options_sorted = tmp_city["_city"].tolist()
 city_pick = multiselect_with_all_sidebar("城市（多選）", city_options_sorted, key_prefix="display_city", default_all=True)
 
+all_districts = sorted(classified_df[DISTRICT_COL].dropna().astype(str).unique().tolist())
+district_pick = multiselect_with_all_sidebar("行政區（多選）", all_districts, key_prefix="display_district", default_all=True)
+
 all_circles = sorted(classified_df[CIRCLE_COL].dropna().astype(str).unique().tolist())
 circle_pick = multiselect_with_all_sidebar("商圈名稱(kiwi)（多選）", all_circles, key_prefix="display_circle", default_all=True)
 
@@ -334,6 +337,11 @@ if city_pick:
 else:
     display_df = display_df.iloc[0:0].copy()
 
+if district_pick:
+    display_df = display_df[display_df[DISTRICT_COL].astype(str).isin(district_pick)].copy()
+else:
+    display_df = display_df.iloc[0:0].copy()
+
 if circle_pick:
     display_df = display_df[display_df[CIRCLE_COL].astype(str).isin(circle_pick)].copy()
 else:
@@ -350,7 +358,7 @@ if len(display_df) == 0:
 st.title("2025 成長率 × 2025 回推平均營業額（品牌內分界預先計算）")
 st.caption(
     "目前邏輯：先依『品牌』使用全資料（僅受計算方式設定影響）預先計算各品牌的 X/Y 分界與象限；"
-    "之後品牌、分區編碼、城市、商圈名稱(kiwi) 只控制畫面顯示，散點圖會依顯示結果自動縮放。"
+    "之後品牌、分區編碼、城市、行政區、商圈名稱(kiwi) 只控制畫面顯示，散點圖會依顯示結果自動縮放。"
 )
 
 c1, c2, c3, c4 = st.columns(4)

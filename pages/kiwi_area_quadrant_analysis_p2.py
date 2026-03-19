@@ -31,6 +31,8 @@ Y_COL = "2025回推平均營業額"   # Y = 回推平均營業額
 BRAND_COL = "品牌"
 ZONE_COL = "分區編碼"
 CITY_COL = "城市"
+CITY_CODE_COL = "城市編碼"
+DISTRICT_COL = "行政區"
 CIRCLE_COL = "商圈名稱(kiwi)"
 MATCHED_COL = "matched_name"
 STORE_UI_COL = "門店"
@@ -71,6 +73,80 @@ def normalize_side(v: str) -> str:
         return "競品"
     return s
 
+
+def parse_optional_float(text: str):
+    if text is None:
+        return None
+    t = str(text).strip()
+    if t == "":
+        return None
+    try:
+        return float(t.replace(",", ""))
+    except Exception:
+        return None
+
+
+def parse_optional_rate(text: str):
+    """
+    成長率欄位專用：
+    - 允許輸入 2.871（代表 287.1%）
+    - 也允許輸入 287.1%（自動轉成 2.871）
+    """
+    if text is None:
+        return None
+    t = str(text).strip().replace(",", "")
+    if t == "":
+        return None
+    try:
+        if t.endswith("%"):
+            return float(t[:-1]) / 100.0
+        return float(t)
+    except Exception:
+        return None
+
+
+def apply_optional_range(df_in: pd.DataFrame, col_internal: str, min_v, max_v) -> pd.DataFrame:
+    out = df_in
+    if min_v is not None:
+        out = out[out[col_internal] >= min_v]
+    if max_v is not None:
+        out = out[out[col_internal] <= max_v]
+    return out
+
+
+def normalize_options(values) -> list[str]:
+    out = []
+    for v in values:
+        if pd.isna(v):
+            continue
+        s = str(v).strip()
+        if s == "" or s.lower() == "nan":
+            continue
+        out.append(s)
+    return sorted(dict.fromkeys(out))
+
+def sync_multiselect_from_options(label: str, options, key: str, help_text: str | None = None) -> list[str]:
+    options_norm = normalize_options(options)
+    prev = st.session_state.get(key, [])
+    if not isinstance(prev, list):
+        prev = []
+    prev_norm = [str(v) for v in prev if str(v) in options_norm]
+
+    if options_norm:
+        st.session_state[key] = prev_norm or options_norm
+    else:
+        st.session_state[key] = []
+
+    return st.sidebar.multiselect(label, options=options_norm, key=key, help=help_text)
+
+def filter_by_values(df_in: pd.DataFrame, col: str, selected_values) -> pd.DataFrame:
+    if col not in df_in.columns:
+        return df_in
+    selected_norm = normalize_options(selected_values)
+    if not selected_norm:
+        return df_in.iloc[0:0].copy()
+    return df_in[df_in[col].astype(str).isin(selected_norm)].copy()
+
 # =========================
 # Validate required columns
 # =========================
@@ -100,8 +176,8 @@ df["_x_raw"] = to_numeric_series(df[X_COL])  # 成長率
 df["_y_raw"] = to_numeric_series(df[Y_COL])  # 回推平均營業額
 df = df.dropna(subset=["_x_raw", "_y_raw"]).copy()
 
-# 成長率逐筆偵測：32.15 -> 0.3215（與 p1 一致）
-df["_x"] = df["_x_raw"].where(df["_x_raw"].abs() <= 1.5, df["_x_raw"] / 100.0)
+# Excel 的百分比數值若已經是數值型，通常已是小數表示法
+df["_x"] = df["_x_raw"]
 df["_y"] = df["_y_raw"]
 
 comp_col = find_first_existing_col(df, COMP_COL_CANDIDATES)
@@ -120,33 +196,45 @@ brands_all = sorted(df[BRAND_COL].dropna().astype(str).unique().tolist())
 # =========================
 st.sidebar.header("篩選器")
 
-# 1) 品牌（依本品/競品拆分）
+st.sidebar.subheader("A. 計算方式設定")
+st.sidebar.markdown(
+    '<div style="font-size:12px; opacity:0.85;">數值篩選只影響「品牌內 X/Y 分界」的計算，不會直接刪除後續儀表板或表格中的門店資料。</div>',
+    unsafe_allow_html=True,
+)
+x_min_calc = parse_optional_rate(st.sidebar.text_input(f"{X_COL} 最小值（計算用）", value="", key="calc_xmin"))
+x_max_calc = parse_optional_rate(st.sidebar.text_input(f"{X_COL} 最大值（計算用）", value="", key="calc_xmax"))
+y_min_calc = parse_optional_float(st.sidebar.text_input(f"{Y_COL} 最小值（計算用）", value="", key="calc_ymin"))
+y_max_calc = parse_optional_float(st.sidebar.text_input(f"{Y_COL} 最大值（計算用）", value="", key="calc_ymax"))
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("B. 呈現篩選")
+
+# 1) 品牌（依本品/競品拆分；作為呈現篩選的最上層）
 # 若找不到本/競品欄位，則退回單一品牌篩選
+st.sidebar.caption("呈現篩選採階層式聯動：品牌 → 分區編碼 → 城市 → 行政區 → 商圈名稱(kiwi)")
+
+if st.sidebar.button("重設呈現篩選為全部"):
+    for _k in ["p2_ben_brand_pick", "p2_comp_brand_pick", "p2_brand_pick", "p2_zone_pick", "p2_city_pick", "p2_district_pick", "p2_circle_pick"]:
+        st.session_state.pop(_k, None)
+    st.rerun()
+
 if comp_col is not None:
     df_all_side_tmp = df.copy()
     df_all_side_tmp["_side_norm"] = df_all_side_tmp[comp_col].apply(normalize_side)
 
-    ben_brands_all = sorted(df_all_side_tmp[df_all_side_tmp["_side_norm"] == "本品"][BRAND_COL].dropna().astype(str).unique().tolist())
-    comp_brands_all = sorted(df_all_side_tmp[df_all_side_tmp["_side_norm"] == "競品"][BRAND_COL].dropna().astype(str).unique().tolist())
+    ben_brands_all = normalize_options(
+        df_all_side_tmp.loc[df_all_side_tmp["_side_norm"] == "本品", BRAND_COL].tolist()
+    )
+    comp_brands_all = normalize_options(
+        df_all_side_tmp.loc[df_all_side_tmp["_side_norm"] == "競品", BRAND_COL].tolist()
+    )
 
-    ben_brand_pick = st.sidebar.multiselect(
-        "本品品牌（多選）",
-        options=ben_brands_all,
-        default=ben_brands_all
-    )
-    comp_brand_pick = st.sidebar.multiselect(
-        "競品品牌（多選）",
-        options=comp_brands_all,
-        default=comp_brands_all
-    )
+    ben_brand_pick = sync_multiselect_from_options("本品品牌（多選）", ben_brands_all, key="p2_ben_brand_pick")
+    comp_brand_pick = sync_multiselect_from_options("競品品牌（多選）", comp_brands_all, key="p2_comp_brand_pick")
 
     brand_pick_union = sorted(set(ben_brand_pick) | set(comp_brand_pick))
 else:
-    brand_pick_union = st.sidebar.multiselect(
-        "品牌（多選）",
-        options=brands_all,
-        default=brands_all
-    )
+    brand_pick_union = sync_multiselect_from_options("品牌（多選）", brands_all, key="p2_brand_pick")
     ben_brand_pick, comp_brand_pick = None, None
 
 # =========================
@@ -156,31 +244,38 @@ PALETTE = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2'
 brand_color_map_global = {b: PALETTE[i % len(PALETTE)] for i, b in enumerate(brands_all)}
 
 # =========================
-# 1) 先用「全資料 df」算出每個品牌自己的分界值（固定，不受 brand_pick 影響）
+# 1) 先用「全資料 df」依品牌計算分界值（固定，不受呈現篩選影響）
+#    並與 testing_p3.py 採用完全一致的前處理與數值篩選邏輯
 # =========================
+calc_df = df.copy()
+calc_df = apply_optional_range(calc_df, "_x", x_min_calc, x_max_calc)
+calc_df = apply_optional_range(calc_df, "_y", y_min_calc, y_max_calc)
+
 if cut_mode == "平均值":
     brand_cuts = (
-        df.groupby(BRAND_COL, dropna=False)
+        calc_df.groupby(BRAND_COL, dropna=False)
           .agg(brand_x_cut=("_x", "mean"), brand_y_cut=("_y", "mean"), store_cnt=("_x", "size"))
           .reset_index()
     )
 else:
     brand_cuts = (
-        df.groupby(BRAND_COL, dropna=False)
+        calc_df.groupby(BRAND_COL, dropna=False)
           .agg(brand_x_cut=("_x", "median"), brand_y_cut=("_y", "median"), store_cnt=("_x", "size"))
           .reset_index()
     )
 
 # =========================
 # 2) 把品牌分界 merge 回每筆資料，計算「品牌內象限」
+#    注意：分類是套回全資料 df，不會因顯示篩選而改變
 # =========================
-df_all = df.merge(brand_cuts[[BRAND_COL, "brand_x_cut", "brand_y_cut"]], on=BRAND_COL, how="left")
+df_all = df.merge(brand_cuts[[BRAND_COL, "brand_x_cut", "brand_y_cut", "store_cnt"]], on=BRAND_COL, how="left")
 
+valid_cut_mask = df_all["brand_x_cut"].notna() & df_all["brand_y_cut"].notna()
 conds = [
-    (df_all["_x"] >= df_all["brand_x_cut"]) & (df_all["_y"] >= df_all["brand_y_cut"]),
-    (df_all["_x"] <  df_all["brand_x_cut"]) & (df_all["_y"] >= df_all["brand_y_cut"]),
-    (df_all["_x"] <  df_all["brand_x_cut"]) & (df_all["_y"] <  df_all["brand_y_cut"]),
-    (df_all["_x"] >= df_all["brand_x_cut"]) & (df_all["_y"] <  df_all["brand_y_cut"]),
+    valid_cut_mask & (df_all["_x"] >= df_all["brand_x_cut"]) & (df_all["_y"] >= df_all["brand_y_cut"]),
+    valid_cut_mask & (df_all["_x"] <  df_all["brand_x_cut"]) & (df_all["_y"] >= df_all["brand_y_cut"]),
+    valid_cut_mask & (df_all["_x"] <  df_all["brand_x_cut"]) & (df_all["_y"] <  df_all["brand_y_cut"]),
+    valid_cut_mask & (df_all["_x"] >= df_all["brand_x_cut"]) & (df_all["_y"] <  df_all["brand_y_cut"]),
 ]
 q_labels = ["第一象限", "第二象限", "第三象限", "第四象限"]
 df_all["象限"] = np.select(conds, q_labels, default="未分類")
@@ -197,83 +292,36 @@ df_view = df_all.copy()
 if comp_col is not None and comp_col in df_view.columns:
     df_view["_side_norm"] = df_view[comp_col].apply(normalize_side)
 
-# ---- 分區 -> 城市 -> 商圈：層級選項更新 ----
-if ZONE_COL in df_view.columns:
-    zones_all = sorted(df_view[ZONE_COL].dropna().astype(str).unique().tolist())
-else:
-    zones_all = []
-
-# Zone multiselect (top level)
-if "zone_pick" not in st.session_state:
-    st.session_state["zone_pick"] = []
-
-if not st.session_state["zone_pick"]:
-    st.session_state["zone_pick"] = zones_all
-else:
-    st.session_state["zone_pick"] = [z for z in st.session_state["zone_pick"] if z in zones_all]
-    if not st.session_state["zone_pick"]:
-        st.session_state["zone_pick"] = zones_all
-
-st.sidebar.multiselect("分區編碼", options=zones_all, default=st.session_state["zone_pick"], key="zone_pick")
-zone_pick = st.session_state["zone_pick"]
-
-df_lv1 = df_view[df_view[ZONE_COL].astype(str).isin([str(x) for x in zone_pick])] if zones_all else df_view
-
-if CITY_COL in df_lv1.columns:
-    cities_all = sorted(df_lv1[CITY_COL].dropna().astype(str).unique().tolist())
-else:
-    cities_all = []
-
-# 重新渲染 sidebar 的下層選項（Streamlit 不能「就地改 options」；因此用 session_state 記住）
-# 這裡採用「如果使用者尚未選或選的已不在可選清單內，則自動改為全選」
-if "city_pick" not in st.session_state:
-    st.session_state["city_pick"] = []
-if not st.session_state["city_pick"]:
-    st.session_state["city_pick"] = cities_all
-else:
-    st.session_state["city_pick"] = [c for c in st.session_state["city_pick"] if c in cities_all]
-    if not st.session_state["city_pick"]:
-        st.session_state["city_pick"] = cities_all
-
-st.sidebar.multiselect("城市", options=cities_all, default=st.session_state["city_pick"], key="city_pick")
-
-city_pick = st.session_state["city_pick"]
-df_lv2 = df_lv1[df_lv1[CITY_COL].astype(str).isin([str(x) for x in city_pick])] if cities_all else df_lv1
-
-if CIRCLE_COL in df_lv2.columns:
-    circles_all = sorted(df_lv2[CIRCLE_COL].dropna().astype(str).unique().tolist())
-else:
-    circles_all = []
-
-if "circle_pick" not in st.session_state:
-    st.session_state["circle_pick"] = []
-if not st.session_state["circle_pick"]:
-    st.session_state["circle_pick"] = circles_all
-else:
-    st.session_state["circle_pick"] = [c for c in st.session_state["circle_pick"] if c in circles_all]
-    if not st.session_state["circle_pick"]:
-        st.session_state["circle_pick"] = circles_all
-
-st.sidebar.multiselect("商圈名稱(kiwi)", options=circles_all, default=st.session_state["circle_pick"], key="circle_pick")
-
-circle_pick = st.session_state["circle_pick"]
-
-# ---- 套用區域層級過濾 ----
-if zones_all:
-    df_view = df_view[df_view[ZONE_COL].astype(str).isin([str(x) for x in zone_pick])]
-if cities_all:
-    df_view = df_view[df_view[CITY_COL].astype(str).isin([str(x) for x in city_pick])]
-if circles_all:
-    df_view = df_view[df_view[CIRCLE_COL].astype(str).isin([str(x) for x in circle_pick])]
-
-# ---- 套用品牌過濾（本品/競品拆分）----
+# ---- 第 1 層：品牌（上層）----
 if comp_col is not None and "_side_norm" in df_view.columns:
-    # 若使用者把某側品牌清空，該側資料就不顯示
-    ben_ok = df_view["_side_norm"].ne("本品") | df_view[BRAND_COL].astype(str).isin([str(x) for x in (ben_brand_pick or [])])
-    comp_ok = df_view["_side_norm"].ne("競品") | df_view[BRAND_COL].astype(str).isin([str(x) for x in (comp_brand_pick or [])])
-    df_view = df_view[ben_ok & comp_ok].copy()
+    ben_ok = df_view["_side_norm"].ne("本品") | df_view[BRAND_COL].astype(str).isin(normalize_options(ben_brand_pick))
+    comp_ok = df_view["_side_norm"].ne("競品") | df_view[BRAND_COL].astype(str).isin(normalize_options(comp_brand_pick))
+    df_brand_scope = df_view[ben_ok & comp_ok].copy()
 else:
-    df_view = df_view[df_view[BRAND_COL].astype(str).isin([str(x) for x in (brand_pick_union or [])])].copy()
+    df_brand_scope = df_view[df_view[BRAND_COL].astype(str).isin(normalize_options(brand_pick_union))].copy()
+
+# ---- 第 2 層：分區編碼 ----
+zones_all = normalize_options(df_brand_scope[ZONE_COL].tolist()) if ZONE_COL in df_brand_scope.columns else []
+zone_pick = sync_multiselect_from_options("分區編碼", zones_all, key="p2_zone_pick")
+df_zone_scope = filter_by_values(df_brand_scope, ZONE_COL, zone_pick) if zones_all else df_brand_scope.copy()
+
+# ---- 第 3 層：城市 ----
+cities_all = normalize_options(df_zone_scope[CITY_COL].tolist()) if CITY_COL in df_zone_scope.columns else []
+city_pick = sync_multiselect_from_options("城市", cities_all, key="p2_city_pick")
+df_city_scope = filter_by_values(df_zone_scope, CITY_COL, city_pick) if cities_all else df_zone_scope.copy()
+
+# ---- 第 4 層：行政區 ----
+districts_all = normalize_options(df_city_scope[DISTRICT_COL].tolist()) if DISTRICT_COL in df_city_scope.columns else []
+district_pick = sync_multiselect_from_options("行政區", districts_all, key="p2_district_pick")
+df_district_scope = filter_by_values(df_city_scope, DISTRICT_COL, district_pick) if districts_all else df_city_scope.copy()
+
+# ---- 第 5 層：商圈名稱(kiwi) ----
+circles_all = normalize_options(df_district_scope[CIRCLE_COL].tolist()) if CIRCLE_COL in df_district_scope.columns else []
+circle_pick = sync_multiselect_from_options("商圈名稱(kiwi)", circles_all, key="p2_circle_pick")
+df_circle_scope = filter_by_values(df_district_scope, CIRCLE_COL, circle_pick) if circles_all else df_district_scope.copy()
+
+# ---- 套用最終顯示過濾 ----
+df_view = df_circle_scope.copy()
 
 if len(df_view) == 0:
     st.warning("目前篩選結果為空，請調整左側篩選器。")
@@ -295,7 +343,7 @@ brand_q_counts = (
           .reset_index()
 )
 
-st.subheader("各品牌分界值（用於該品牌門店象限判定）")
+st.subheader("各品牌分界值（用於該品牌門店象限判定；與 testing_p3 相同邏輯）")
 show_cuts = brand_cuts_show.copy()
 show_cuts["X分界(成長率)"] = show_cuts["brand_x_cut"].map(lambda v: f"{v:.2%}")
 show_cuts["Y分界(回推平均營業額)"] = show_cuts["brand_y_cut"].map(lambda v: f"{v:,.2f}")

@@ -3,6 +3,7 @@ import re
 import numpy as np
 import pandas as pd
 import plotly.express as px
+from plotly.colors import qualitative
 import streamlit as st
 
 st.set_page_config(page_title="象限分析", layout="wide")
@@ -295,6 +296,7 @@ circle_pick = multiselect_with_all_sidebar("商圈名稱(kiwi)（多選）", all
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("圖表顯示設定")
+show_brand_cut_lines = st.sidebar.toggle("顯示品牌 XY 軸分界線", value=False)
 show_labels = st.sidebar.toggle("顯示資料標籤（門店）", value=False)
 marker_size = st.sidebar.slider("點大小", min_value=4, max_value=30, value=12, step=1)
 label_font_size = st.sidebar.slider("資料標籤字體大小", min_value=8, max_value=28, value=14, step=1)
@@ -387,8 +389,10 @@ if single_brand_cut is not None and pd.notna(single_brand_cut["x_cut"]) and pd.n
     bx1.metric("目前品牌", str(single_brand_cut[BRAND_COL]))
     bx2.metric("品牌內 X 分界", f"{float(single_brand_cut['x_cut']):.2%}")
     bx3.metric("品牌內 Y 分界", f"{float(single_brand_cut['y_cut']):,.2f}")
+elif show_brand_cut_lines:
+    st.info("目前為多品牌顯示；已可用品牌顏色疊加各品牌 XY 軸分界線。若畫面過於密集，可關閉左側的『顯示品牌 XY 軸分界線』。")
 else:
-    st.info("目前畫面包含多個品牌，因此不顯示單一共用的十字分界線；請改看下方『品牌分界摘要』。")
+    st.info("目前畫面包含多個品牌；可用左側的『顯示品牌 XY 軸分界線』來切換是否顯示各品牌分界線，並搭配下方『品牌分界摘要』閱讀。")
 
 hover_dict = {
     STORE_UI_COL: True,
@@ -428,11 +432,16 @@ if show_labels and declutter_labels:
     )
     plot_df["_label"] = np.where(plot_df.index.isin(keep_idx), plot_df["_label"], "")
 
+brand_color_candidates = sorted(plot_df[BRAND_COL].dropna().astype(str).unique().tolist())
+palette = qualitative.Plotly + qualitative.D3 + qualitative.G10
+brand_color_map = {brand: palette[i % len(palette)] for i, brand in enumerate(brand_color_candidates)}
+
 fig = px.scatter(
     plot_df,
     x="_x",
     y="_y",
     color=BRAND_COL,
+    color_discrete_map=brand_color_map,
     text="_label",
     hover_data=hover_dict,
     labels={
@@ -445,19 +454,38 @@ fig = px.scatter(
     title=f"散點圖（品牌內{cut_mode}分界已預先計算｜顏色=品牌）",
 )
 
-if single_brand_cut is not None and pd.notna(single_brand_cut["x_cut"]) and pd.notna(single_brand_cut["y_cut"]):
-    fig.add_vline(
-        x=float(single_brand_cut["x_cut"]),
-        line_dash="dash",
-        annotation_text=f"X分界: {float(single_brand_cut['x_cut']):.2%}",
-        annotation_position="top",
+if show_brand_cut_lines:
+    line_cut_df = (
+        brand_cut_df[brand_cut_df[BRAND_COL].astype(str).isin(shown_brands)]
+        .copy()
+        .dropna(subset=["x_cut", "y_cut"])
     )
-    fig.add_hline(
-        y=float(single_brand_cut["y_cut"]),
-        line_dash="dash",
-        annotation_text=f"Y分界: {float(single_brand_cut['y_cut']):,.2f}",
-        annotation_position="right",
-    )
+    for _, cut_row in line_cut_df.iterrows():
+        brand_name = str(cut_row[BRAND_COL])
+        line_color = brand_color_map.get(brand_name, "#AAAAAA")
+        is_single_brand = len(line_cut_df) == 1
+
+        vline_kwargs = dict(
+            x=float(cut_row["x_cut"]),
+            line_dash="dash",
+            line_color=line_color,
+            opacity=0.7,
+        )
+        hline_kwargs = dict(
+            y=float(cut_row["y_cut"]),
+            line_dash="dash",
+            line_color=line_color,
+            opacity=0.7,
+        )
+
+        if is_single_brand:
+            vline_kwargs["annotation_text"] = f"{brand_name} X分界: {float(cut_row['x_cut']):.2%}"
+            vline_kwargs["annotation_position"] = "top"
+            hline_kwargs["annotation_text"] = f"{brand_name} Y分界: {float(cut_row['y_cut']):,.2f}"
+            hline_kwargs["annotation_position"] = "right"
+
+        fig.add_vline(**vline_kwargs)
+        fig.add_hline(**hline_kwargs)
 
 if show_labels:
     fig.update_traces(
